@@ -8,6 +8,7 @@
 - 健康检查路径：`/health`
 - 数据格式：除文件上传和重定向接口外，均使用 `application/json`
 - 登录态：OAuth 回调成功后由服务端设置 `can_i_session` HttpOnly Cookie；浏览器请求需携带 Cookie
+- 写入、更新和删除接口需要携带 `X-Requested-With: XMLHttpRequest`；前端客户端会自动添加，用于防止跨站表单伪造请求
 - 角色：`owner`（最高管理员）和 `user`（普通用户）
 - 普通受保护接口返回 `401 unauthorized`；禁用用户返回 `403 disabled`
 - Owner 接口权限不足时返回 `403 owner_required`
@@ -49,12 +50,22 @@
 | POST | `/api/v1/plans/{id}/analyze` | 登录 | 创建异步分析任务 |
 | GET | `/api/v1/plans/{id}/analysis` | 登录 | 获取计划书的最新分析任务 |
 | POST | `/api/v1/plans/{id}/analysis/retry` | 登录 | 重新入队失败的分析任务 |
+| GET | `/api/v1/assets` | 登录 | 获取当前用户的素材对象 |
+| POST | `/api/v1/assets` | 登录 | 上传或登记素材（upload / ai_generated / fetched） |
+| GET | `/api/v1/assets/{id}` | 登录 | 获取素材元数据和下载链接 |
+| GET | `/api/v1/assets/{id}/download` | 登录 | 下载素材或跳转到 R2 链接 |
+| DELETE | `/api/v1/assets/{id}` | 登录 | 删除自己的素材 |
 | GET | `/api/v1/admin/users` | Owner | 获取全部用户 |
 | PATCH | `/api/v1/admin/users/{id}` | Owner | 启用或禁用普通用户 |
 | GET | `/api/v1/admin/plans` | Owner | 获取全部计划书 |
 | GET | `/api/v1/admin/analysis` | Owner | 分页获取全部分析任务 |
 | GET | `/api/v1/admin/settings/ai` | Owner | 获取 AI 服务配置 |
 | PATCH | `/api/v1/admin/settings/ai` | Owner | 更新 AI 服务配置 |
+| GET | `/api/v1/admin/settings/storage` | Owner | 获取 R2 存储配置（不返回密钥） |
+| PATCH | `/api/v1/admin/settings/storage` | Owner | 更新 R2 存储配置 |
+| POST | `/api/v1/admin/settings/storage/test` | Owner | 测试 R2 Bucket 连接 |
+| GET | `/api/v1/admin/assets` | Owner | 分页获取全部素材对象 |
+| DELETE | `/api/v1/admin/assets/{id}` | Owner | 删除素材对象和记录 |
 
 ## 健康检查
 
@@ -182,6 +193,8 @@
   "status": "uploaded",
   "size_bytes": 102400,
   "version": 1,
+  "asset_id": 18,
+  "download_url": "/api/v1/assets/18/download",
   "created_at": "2026-08-08T12:00:00Z",
   "updated_at": "2026-08-08T12:00:00Z"
 }
@@ -221,6 +234,8 @@ curl -X POST http://localhost:5173/api/v1/plans \
 
 只允许读取当前用户拥有的计划书。成功返回 `200` 和计划书对象；不存在或不属于当前用户时返回 `404 not_found`。
 
+计划书上传会自动创建一个 `source=upload` 的素材对象；`asset_id` 和 `download_url` 可用于下载原始文件。
+
 ### `POST /api/v1/plans/{id}/analyze`
 
 为当前用户拥有的计划书创建异步分析任务。无请求体，成功返回 `202`：
@@ -255,6 +270,32 @@ curl -X POST http://localhost:5173/api/v1/plans \
 ### `POST /api/v1/plans/{id}/analysis/retry`
 
 将最新一条 `failed` 分析任务重新置为 `queued`。仅计划书所属用户或 Owner 可操作。无请求体，成功返回 `202` 和任务 id；没有失败任务时返回 `409 not_retryable`，无权操作返回 `403 forbidden`。
+
+## 素材对象
+
+素材对象统一记录用户上传、AI 生成和外部获取的二进制资料。`source` 只能是 `upload`、`ai_generated` 或 `fetched`。对象内容写入 R2 后，默认通过 15 分钟有效的私有预签名 URL 下载；配置 `R2_PUBLIC_URL` 时使用公开 CDN URL。未启用 R2 时使用 `UPLOAD_DIR` 本地回退存储。
+
+### `POST /api/v1/assets`
+
+请求类型：`multipart/form-data`，字段如下：
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `file` | 是 | 素材文件，最大 20 MiB |
+| `source` | 否 | `upload`（默认）、`ai_generated` 或 `fetched` |
+| `name` | 否 | 展示名称，默认使用文件名 |
+| `plan_id` | 否 | 关联当前用户的计划书 |
+| `metadata` | 否 | JSON 对象字符串 |
+
+服务端 AI/抓取任务也可以直接调用 `assets.Service.Save`，无需伪造 HTTP 上传请求。
+
+### `GET /api/v1/assets`
+
+返回当前用户最近 200 个素材；可用 `?source=ai_generated` 筛选来源。每项包含 `download_url`，对象 key 和凭据不会返回。
+
+### `GET /api/v1/assets/{id}/download` 与 `DELETE /api/v1/assets/{id}`
+
+只允许素材所属用户或 Owner 访问。下载在 R2 模式下跳转到签名 URL，本地模式由 API 鉴权后读取文件；删除会同时删除对象和数据库记录。
 
 ## Owner 管理接口
 
@@ -354,6 +395,12 @@ API Key 永不返回明文：
 - 保存新密钥要求 `APP_ENCRYPTION_KEY` 是 32 字节，否则返回 `503 encryption_not_configured`。开发环境未配置时会使用内置的 32 字节开发密钥；生产环境必须显式配置随机密钥。
 - 成功返回 `200`；响应中的 `has_api_key` 当前为字符串 `"true"` 或 `"false"`。
 
+### R2 存储设置与素材管理
+
+`GET /api/v1/admin/settings/storage` 返回 endpoint、bucket、公开 URL、region 和 `has_credentials`，不会返回 Access Key 或 Secret。`PATCH` 接受同名 JSON 字段（前端使用 snake_case），凭据为空时保留原值；`clear_credentials=true` 可清除凭据。启用 R2 时 endpoint 和 bucket 必填，并且要求 `http(s)` URL。
+
+`POST /api/v1/admin/settings/storage/test` 会执行 Bucket `HeadBucket` 检查。`GET /api/v1/admin/assets` 支持 `source`、`page`、`page_size` 筛选并返回全部用户素材；`DELETE /api/v1/admin/assets/{id}` 同时删除 R2 对象和记录。
+
 ## 浏览器调用示例
 
 前端必须允许浏览器携带 HttpOnly Cookie：
@@ -362,5 +409,13 @@ API Key 永不返回明文：
 const response = await fetch('/api/v1/auth/me', {
   credentials: 'include',
   headers: { Accept: 'application/json' },
+})
+
+// POST/PATCH/DELETE additionally require this non-simple header.
+const upload = await fetch('/api/v1/assets', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'X-Requested-With': 'XMLHttpRequest' },
+  body: formData,
 })
 ```

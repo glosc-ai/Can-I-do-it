@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { CircleAlertIcon } from '@lucide/vue'
-import { toast } from 'vue-sonner'
+import { toast } from '@/lib/message'
 import { listAdminUsers, setUserStatus, type AdminUser } from '@/api/admin'
 import AdminLayout from '@/components/layout/AdminLayout.vue'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'

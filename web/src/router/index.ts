@@ -41,6 +41,12 @@ const router = createRouter({
       meta: { requiresOwner: true },
     },
     {
+      path: '/admin/storage',
+      name: 'admin-storage',
+      component: () => import('@/views/AdminStorageView.vue'),
+      meta: { requiresOwner: true },
+    },
+    {
       path: '/:pathMatch(.*)*',
       redirect: '/',
     },

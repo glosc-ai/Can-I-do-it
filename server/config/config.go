@@ -38,6 +38,22 @@ type Session struct {
 type Storage struct {
 	Directory      string
 	MaxUploadBytes int64
+	R2             R2
+}
+
+// R2 contains the S3-compatible credentials used by Cloudflare R2. The
+// values are intentionally kept in the server configuration only as defaults;
+// owner-managed values are persisted in app_settings and take precedence.
+type R2 struct {
+	Enabled         bool
+	AccountID       string
+	Endpoint        string
+	Bucket          string
+	AccessKeyID     string
+	SecretAccessKey string
+	PublicURL       string
+	Region          string
+	ForcePathStyle  bool
 }
 type AI struct{ Endpoint, Model, APIKey string }
 
@@ -122,6 +138,20 @@ func Load() (Config, error) {
 		encryptionKey = developmentEncryptionKey
 	}
 
+	r2Enabled, err := envBool("R2_ENABLED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	forcePathStyle, err := envBool("R2_FORCE_PATH_STYLE", false)
+	if err != nil {
+		return Config{}, err
+	}
+	r2Endpoint := os.Getenv("R2_ENDPOINT")
+	accountID := os.Getenv("R2_ACCOUNT_ID")
+	if r2Endpoint == "" && accountID != "" {
+		r2Endpoint = "https://" + accountID + ".r2.cloudflarestorage.com"
+	}
+
 	return Config{
 		Environment: environment,
 		HTTPAddr:    cmp.Or(os.Getenv("HTTP_ADDR"), ":8080"),
@@ -145,9 +175,23 @@ func Load() (Config, error) {
 			Issuer: cmp.Or(os.Getenv("JWT_ISSUER"), "go-vue-starter"),
 			TTL:    jwtTTL,
 		},
-		SSO:           SSO{DiscoveryURL: cmp.Or(os.Getenv("SSO_DISCOVERY_URL"), "https://sso.gloscai.com/api/.well-known/openid-configuration"), ClientID: os.Getenv("SSO_CLIENT_ID"), ClientSecret: os.Getenv("SSO_CLIENT_SECRET"), RedirectURI: cmp.Or(os.Getenv("SSO_REDIRECT_URI"), "http://localhost:5173/api/v1/auth/callback")},
-		Session:       Session{CookieName: cmp.Or(os.Getenv("SESSION_COOKIE_NAME"), "can_i_session"), TTL: sessionTTL, Secure: environment == "production"},
-		Storage:       Storage{Directory: cmp.Or(os.Getenv("UPLOAD_DIR"), "/tmp/can-i-do-it/uploads"), MaxUploadBytes: 20 * 1024 * 1024},
+		SSO:     SSO{DiscoveryURL: cmp.Or(os.Getenv("SSO_DISCOVERY_URL"), "https://sso.gloscai.com/api/.well-known/openid-configuration"), ClientID: os.Getenv("SSO_CLIENT_ID"), ClientSecret: os.Getenv("SSO_CLIENT_SECRET"), RedirectURI: cmp.Or(os.Getenv("SSO_REDIRECT_URI"), "http://localhost:5173/api/v1/auth/callback")},
+		Session: Session{CookieName: cmp.Or(os.Getenv("SESSION_COOKIE_NAME"), "can_i_session"), TTL: sessionTTL, Secure: environment == "production"},
+		Storage: Storage{
+			Directory:      cmp.Or(os.Getenv("UPLOAD_DIR"), "/tmp/can-i-do-it/uploads"),
+			MaxUploadBytes: 20 * 1024 * 1024,
+			R2: R2{
+				Enabled:         r2Enabled,
+				AccountID:       accountID,
+				Endpoint:        r2Endpoint,
+				Bucket:          os.Getenv("R2_BUCKET"),
+				AccessKeyID:     os.Getenv("R2_ACCESS_KEY_ID"),
+				SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
+				PublicURL:       strings.TrimRight(os.Getenv("R2_PUBLIC_URL"), "/"),
+				Region:          cmp.Or(os.Getenv("R2_REGION"), "auto"),
+				ForcePathStyle:  forcePathStyle,
+			},
+		},
 		AI:            AI{Endpoint: os.Getenv("AI_ENDPOINT"), Model: cmp.Or(os.Getenv("AI_MODEL"), "gpt-4o-mini"), APIKey: os.Getenv("AI_API_KEY")},
 		EncryptionKey: encryptionKey,
 	}, nil

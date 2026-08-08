@@ -5,32 +5,38 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/gloscai/template-go-vue3-docker/server/users"
-	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gloscai/template-go-vue3-docker/server/assets"
+	"github.com/gloscai/template-go-vue3-docker/server/storage"
+	"github.com/gloscai/template-go-vue3-docker/server/users"
 )
 
 type Service struct {
 	db          *sql.DB
-	driver, dir string
+	driver      string
+	store       *storage.Service
+	assetRecord *assets.Service
+	dir         string // retained for compatibility with callers of New
 	max         int64
 }
 type Plan struct {
-	ID        int64     `json:"id"`
-	UserID    int64     `json:"user_id"`
-	Title     string    `json:"title"`
-	Filename  string    `json:"filename"`
-	MimeType  string    `json:"mime_type"`
-	Status    string    `json:"status"`
-	Size      int64     `json:"size_bytes"`
-	Version   int       `json:"version"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          int64     `json:"id"`
+	UserID      int64     `json:"user_id"`
+	Title       string    `json:"title"`
+	Filename    string    `json:"filename"`
+	MimeType    string    `json:"mime_type"`
+	Status      string    `json:"status"`
+	Size        int64     `json:"size_bytes"`
+	Version     int       `json:"version"`
+	AssetID     *int64    `json:"asset_id,omitempty"`
+	DownloadURL string    `json:"download_url,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type Analysis struct {
@@ -51,7 +57,11 @@ type AdminAnalysis struct {
 }
 
 func New(db *sql.DB, driver, dir string, max int64) *Service {
-	return &Service{db: db, driver: driver, dir: dir, max: max}
+	return &Service{db: db, driver: driver, dir: dir, max: max, store: storage.New(nil, driver, "", dir, max, storage.R2Config{})}
+}
+
+func NewWithStorage(db *sql.DB, driver string, store *storage.Service, recorder *assets.Service, max int64) *Service {
+	return &Service{db: db, driver: driver, store: store, assetRecord: recorder, max: max}
 }
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/plans", s.list)
@@ -75,6 +85,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Plan
 		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
+			s.enrichAsset(r.Context(), &p)
 			items = append(items, p)
 		}
 	}
@@ -82,6 +93,9 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
+	// Bound the complete multipart body (including form overhead), not just
+	// the reported file header size, before ParseMultipartForm buffers it.
+	r.Body = http.MaxBytesReader(w, r.Body, s.max+1024*1024)
 	if err := r.ParseMultipartForm(s.max); err != nil {
 		errJSON(w, 413, "file_too_large", "file is too large")
 		return
@@ -100,21 +114,9 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 413, "file_too_large", "file is too large")
 		return
 	}
-	if e = os.MkdirAll(s.dir, 0750); e != nil {
-		errJSON(w, 500, "storage_error", "could not prepare storage")
-		return
-	}
-	key := fmt.Sprintf("%d-%d-%s", u.ID, time.Now().UnixNano(), filepath.Base(header.Filename))
-	path := filepath.Join(s.dir, key)
-	out, e := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
-	if e != nil {
-		errJSON(w, 500, "storage_error", "could not save file")
-		return
-	}
-	_, e = io.Copy(out, file)
-	out.Close()
-	if e != nil {
-		errJSON(w, 500, "storage_error", "could not save file")
+	key := fmt.Sprintf("users/%d/upload/%d-%s", u.ID, time.Now().UnixNano(), safeFilename(header.Filename))
+	if e = s.store.Put(r.Context(), key, file, header.Size, header.Header.Get("Content-Type")); e != nil {
+		errJSON(w, 500, storage.HTTPErrorCode(e), "could not save file")
 		return
 	}
 	var p Plan
@@ -136,11 +138,36 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if e != nil {
-		_ = os.Remove(path)
+		_ = s.store.Delete(context.Background(), key)
 		errJSON(w, 500, "internal_error", "could not create plan")
 		return
 	}
+	if s.assetRecord != nil {
+		planID := p.ID
+		var recorded assets.Asset
+		if recorded, e = s.assetRecord.RecordExisting(r.Context(), u.ID, &planID, "upload", p.Filename, key, p.MimeType, p.Size, "{}"); e != nil {
+			_, _ = s.db.ExecContext(r.Context(), s.q("DELETE FROM business_plans WHERE id=?"), p.ID)
+			_ = s.store.Delete(context.Background(), key)
+			errJSON(w, 500, "internal_error", "could not record uploaded asset")
+			return
+		}
+		p.AssetID = &recorded.ID
+		p.DownloadURL = fmt.Sprintf("/api/v1/assets/%d/download", recorded.ID)
+	}
 	jsonOut(w, 201, map[string]any{"data": p})
+}
+
+func safeFilename(filename string) string {
+	filename = filepath.Base(strings.TrimSpace(filename))
+	if filename == "" || filename == "." {
+		return "upload"
+	}
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._-", r) {
+			return r
+		}
+		return '-'
+	}, filename)
 }
 func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
@@ -155,6 +182,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 500, "internal_error", "could not load plan")
 		return
 	}
+	s.enrichAsset(r.Context(), &p)
 	jsonOut(w, 200, map[string]any{"data": p})
 }
 func (s *Service) analyze(w http.ResponseWriter, r *http.Request) {
@@ -355,10 +383,29 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Plan
 		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
+			s.enrichAsset(r.Context(), &p)
 			items = append(items, p)
 		}
 	}
 	jsonOut(w, 200, map[string]any{"data": items})
+}
+
+func (s *Service) enrichAsset(ctx context.Context, p *Plan) {
+	if p == nil {
+		return
+	}
+	var id int64
+	var key string
+	if err := s.db.QueryRowContext(ctx, s.q("SELECT id,object_key FROM storage_assets WHERE plan_id=? ORDER BY id DESC LIMIT 1"), p.ID).Scan(&id, &key); err != nil {
+		return
+	}
+	p.AssetID = &id
+	p.DownloadURL = fmt.Sprintf("/api/v1/assets/%d/download", id)
+	if s.store != nil {
+		if url, err := s.store.URL(ctx, key, 15*time.Minute); err == nil && url != "" {
+			p.DownloadURL = url
+		}
+	}
 }
 func (s *Service) q(q string) string {
 	if s.driver != "postgres" {

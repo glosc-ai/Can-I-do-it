@@ -4,10 +4,11 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowLeftIcon,
   CircleAlertIcon,
+  DownloadIcon,
   PlayIcon,
   RotateCcwIcon,
 } from '@lucide/vue'
-import { toast } from 'vue-sonner'
+import { toast } from '@/lib/message'
 import {
   analyzePlan,
   getAnalysis,
@@ -160,6 +161,10 @@ onUnmounted(clearPoll)
             <p class="truncate text-sm text-muted-foreground">{{ plan.filename }}</p>
           </div>
           <div class="flex gap-2">
+            <Button v-if="plan.download_url" as="a" :href="plan.download_url" target="_blank" rel="noopener noreferrer" variant="outline">
+              <DownloadIcon data-icon="inline-start" />
+              下载文件
+            </Button>
             <Button v-if="canAnalyze" :disabled="actionPending" @click="startAnalysis">
               <PlayIcon data-icon="inline-start" />
               开始分析

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { CircleAlertIcon, FileTextIcon, FileUpIcon, PlayIcon } from '@lucide/vue'
-import { toast } from 'vue-sonner'
+import { CircleAlertIcon, DownloadIcon, FileTextIcon, FileUpIcon, PlayIcon } from '@lucide/vue'
+import { toast } from '@/lib/message'
 import type { Plan } from '@/api/plans'
 import WorkspaceLayout from '@/components/layout/WorkspaceLayout.vue'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -176,6 +176,19 @@ onUnmounted(store.stop)
                     {{ formatTime(plan.updated_at || plan.created_at) }}
                   </TableCell>
                   <TableCell class="text-right">
+                    <Button
+                      v-if="plan.download_url"
+                      as="a"
+                      :href="plan.download_url"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      variant="ghost"
+                      size="sm"
+                      @click.stop
+                    >
+                      <DownloadIcon data-icon="inline-start" />
+                      下载
+                    </Button>
                     <Button
                       v-if="plan.status === 'uploaded'"
                       variant="outline"

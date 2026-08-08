@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeftIcon, FileSearchIcon, SettingsIcon, UsersIcon } from '@lucide/vue'
+import { ArrowLeftIcon, CloudIcon, FileSearchIcon, SettingsIcon, UsersIcon } from '@lucide/vue'
 import SidebarLayout from './SidebarLayout.vue'
 import type { NavSection } from './nav'
 
@@ -10,6 +10,7 @@ const sections: NavSection[] = [
       { to: '/admin/users', label: '用户管理', icon: UsersIcon },
       { to: '/admin/plans', label: '计划与分析', icon: FileSearchIcon },
       { to: '/admin/settings', label: 'AI 设置', icon: SettingsIcon },
+      { to: '/admin/storage', label: 'R2 存储', icon: CloudIcon },
     ],
   },
   {

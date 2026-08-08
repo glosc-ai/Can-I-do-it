@@ -22,6 +22,9 @@ export class APIError extends Error {
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json')
+  if (init.method && !['GET', 'HEAD', 'OPTIONS'].includes(init.method.toUpperCase())) {
+    headers.set('X-Requested-With', 'XMLHttpRequest')
+  }
   // Let the browser set the multipart boundary for FormData bodies.
   if (init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')

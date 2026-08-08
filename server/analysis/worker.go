@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -11,16 +12,23 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/gloscai/template-go-vue3-docker/server/assets"
 )
 
 type Worker struct {
 	db     *sql.DB
 	driver string
 	key    []byte
+	assets *assets.Service
 }
 
-func NewWorker(db *sql.DB, driver, encryptionKey string) *Worker {
-	return &Worker{db: db, driver: driver, key: []byte(encryptionKey)}
+func NewWorker(db *sql.DB, driver, encryptionKey string, assetServices ...*assets.Service) *Worker {
+	var assetService *assets.Service
+	if len(assetServices) > 0 {
+		assetService = assetServices[0]
+	}
+	return &Worker{db: db, driver: driver, key: []byte(encryptionKey), assets: assetService}
 }
 func (w *Worker) Run(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
@@ -35,9 +43,9 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 func (w *Worker) process(ctx context.Context) {
-	var id, plan int64
-	var status string
-	query := "SELECT id,plan_id,status FROM analysis_jobs WHERE status='queued' ORDER BY id LIMIT 1"
+	var id, plan, userID int64
+	var filename, status string
+	query := "SELECT j.id,j.plan_id,p.user_id,p.filename,j.status FROM analysis_jobs j JOIN business_plans p ON p.id=j.plan_id WHERE j.status='queued' ORDER BY j.id LIMIT 1"
 	if w.driver == "postgres" {
 		query += " FOR UPDATE SKIP LOCKED"
 	}
@@ -46,7 +54,7 @@ func (w *Worker) process(ctx context.Context) {
 		return
 	}
 	defer tx.Rollback()
-	if e = tx.QueryRowContext(ctx, query).Scan(&id, &plan, &status); e != nil {
+	if e = tx.QueryRowContext(ctx, query).Scan(&id, &plan, &userID, &filename, &status); e != nil {
 		return
 	}
 	if _, e = tx.ExecContext(ctx, w.q("UPDATE analysis_jobs SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='queued'"), "running", id); e != nil {
@@ -105,6 +113,13 @@ func (w *Worker) process(ctx context.Context) {
 		planStatus = "failed"
 	}
 	_, _ = w.db.ExecContext(ctx, w.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), planStatus, plan)
+	if jobStatus == "succeeded" && w.assets != nil {
+		planID := plan
+		_, _ = w.assets.Save(ctx, userID, &planID, "ai_generated", fmt.Sprintf("analysis-%d.json", id), "application/json", int64(len(payload)), map[string]any{
+			"analysis_job_id": id,
+			"filename":        filename,
+		}, bytes.NewReader(payload))
+	}
 }
 func (w *Worker) aiSettings(ctx context.Context) (string, string, string) {
 	q := "SELECT `key`,value FROM app_settings"

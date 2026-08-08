@@ -8,6 +8,8 @@ export interface Plan {
   mime_type: string
   size_bytes: number
   version: number
+  asset_id?: number
+  download_url?: string
   status: string
   created_at: string
   updated_at: string

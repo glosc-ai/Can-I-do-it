@@ -1,17 +1,22 @@
 package analysis
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/x509"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/gloscai/template-go-vue3-docker/server/assets"
@@ -97,6 +102,10 @@ func (w *Worker) process(ctx context.Context) {
 		content := userContent(source)
 		requestBody := map[string]any{
 			"model": model,
+			// The provider sits behind a gateway with a short first-byte timeout.
+			// Streaming keeps that connection active while the model generates the
+			// (comparatively large) nine-dimension JSON result.
+			"stream": true,
 			"messages": []map[string]any{
 				{"role": "system", "content": skillPrompt()},
 				{"role": "user", "content": content},
@@ -104,35 +113,61 @@ func (w *Worker) process(ctx context.Context) {
 			"temperature": 0.2,
 		}
 		body, _ := json.Marshal(requestBody)
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+"/chat/completions", bytes.NewReader(body))
-		if reqErr != nil {
-			jobStatus, failure, summary = "failed", reqErr.Error(), "分析请求创建失败。"
-		} else {
+		client := &http.Client{Timeout: 4 * time.Minute}
+		var resp *http.Response
+		var callErr error
+		for attempt := 0; attempt < 2; attempt++ {
+			req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(endpoint, "/")+"/chat/completions", bytes.NewReader(body))
+			if reqErr != nil {
+				callErr = reqErr
+				break
+			}
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("Authorization", "Bearer "+key)
-			client := &http.Client{Timeout: 4 * time.Minute}
-			resp, callErr := client.Do(req)
-			if callErr != nil {
-				jobStatus, failure, summary = "failed", "could not reach AI provider: "+callErr.Error(), "无法连接 AI 服务。"
+			req.Header.Set("Idempotency-Key", fmt.Sprintf("analysis-%d", id))
+			// A failed keep-alive connection can surface as EOF before headers.
+			// Do not reuse it for the retry.
+			req.Close = true
+			resp, callErr = client.Do(req)
+			if resp != nil || callErr == nil || !retryableProviderRequestError(callErr) || attempt == 1 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				attempt = 2
+			case <-time.After(250 * time.Millisecond):
+			}
+		}
+		if callErr != nil && resp == nil {
+			failure, summary = providerRequestFailure(callErr)
+			jobStatus = "failed"
+		} else {
+			defer resp.Body.Close()
+			if resp.StatusCode/100 != 2 {
+				failure, summary = providerHTTPFailure(resp)
+				jobStatus = "failed"
 			} else {
-				defer resp.Body.Close()
-				if resp.StatusCode/100 != 2 {
-					jobStatus, failure, summary = "failed", fmt.Sprintf("AI provider returned HTTP %d", resp.StatusCode), "AI 服务返回错误。"
-				} else {
-					var ai struct {
-						Choices []struct {
-							Message struct {
-								Content string `json:"content"`
-							} `json:"message"`
-						} `json:"choices"`
-					}
-					if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&ai); err != nil || len(ai.Choices) == 0 {
-						jobStatus, failure, summary = "failed", "AI provider returned an invalid response", "AI 服务返回了无法解析的结果。"
-					} else if normalized, normalizeErr := normalizeResult(ai.Choices[0].Message.Content, plan, source); normalizeErr != nil {
-						jobStatus, failure, summary = "failed", normalizeErr.Error(), "AI 结果不是合法的结构化评分。"
+				responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024+1))
+				if len(responseBody) > 2*1024*1024 {
+					jobStatus, failure, summary = "failed", "AI 服务响应过大。", "AI 服务返回内容超过 2 MB 限制，请缩短输出或检查模型配置。"
+				} else if len(bytes.TrimSpace(responseBody)) == 0 {
+					jobStatus = "failed"
+					if readErr != nil {
+						failure, summary = "无法读取 AI 服务响应。", "AI 服务响应读取失败，请检查网关连接和上游服务日志。"
 					} else {
-						result, summary = normalized, normalized.Summary
+						failure, summary = "AI 服务返回了空响应，可能在生成结果时断开了连接。", "AI 服务没有返回可用内容，请检查网关超时和上游服务日志。"
 					}
+				} else if content, err := providerResponseContent(responseBody); err != nil {
+					jobStatus = "failed"
+					if errors.Is(err, io.EOF) {
+						failure, summary = "AI 服务返回了空响应，可能在生成结果时断开了连接。", "AI 服务没有返回可用内容，请检查网关超时和上游服务日志。"
+					} else {
+						failure, summary = "AI 服务返回格式不完整："+err.Error(), "AI 服务响应格式异常，请检查模型网关的 OpenAI 兼容配置。"
+					}
+				} else if normalized, normalizeErr := normalizeResult(content, plan, source); normalizeErr != nil {
+					jobStatus, failure, summary = "failed", "AI 返回内容无法转换为结构化评分："+normalizeErr.Error(), "AI 结果格式不符合分析要求，请重试或检查模型配置。"
+				} else {
+					result, summary = normalized, normalized.Summary
 				}
 			}
 		}
@@ -166,6 +201,220 @@ func (w *Worker) process(ctx context.Context) {
 		planStatus = "failed"
 	}
 	_, _ = w.db.ExecContext(ctx, w.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), planStatus, plan)
+}
+
+// providerRequestFailure turns transport errors into messages that tell the
+// operator what can actually be fixed. In particular, EOF means the peer
+// closed the connection before sending HTTP response headers; it is different
+// from a provider HTTP error or an invalid AI response body.
+func providerRequestFailure(err error) (string, string) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "AI 服务响应超时。", "AI 服务在规定时间内没有返回结果，请检查模型耗时或网关超时配置。"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "AI 分析请求已取消。", "任务可能因服务重启或关闭而中断，请重新提交分析。"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "无法解析 AI 服务域名。", "请检查 AI Endpoint 的域名、服务器 DNS 和网络配置。"
+	}
+	var certErr x509.CertificateInvalidError
+	var hostnameErr x509.HostnameError
+	var authorityErr x509.UnknownAuthorityError
+	if errors.As(err, &certErr) || errors.As(err, &hostnameErr) || errors.As(err, &authorityErr) {
+		return "AI 服务 TLS 证书验证失败。", "请检查 Endpoint 域名、证书有效期和证书链配置。"
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return "AI 服务拒绝了连接。", "请确认 AI 服务正在运行，并检查 Endpoint 端口及防火墙配置。"
+	}
+	if errors.Is(err, syscall.ECONNRESET) {
+		return "AI 服务连接被重置。", "连接被 AI 服务或中间网关中断，请检查上游服务和网关日志。"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "AI 服务连接超时。", "无法及时连接或读取 AI 服务，请检查网络和网关超时配置。"
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "AI 服务在返回结果前关闭了连接（EOF）。", "AI 服务可能已经接受请求，但结果没有成功传回，请检查网关连接和上游服务日志。"
+	}
+	return "无法连接 AI 服务。", "请检查 AI Endpoint、DNS 和服务器出网网络。"
+}
+
+func retryableProviderRequestError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
+}
+
+// providerResponseContent extracts the assistant text from an
+// OpenAI-compatible response. A few gateways return content as an array of
+// text parts, so accepting both forms avoids treating an otherwise valid
+// result as an empty choices response.
+func providerResponseContent(raw []byte) (string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return "", io.EOF
+	}
+	if bytes.HasPrefix(bytes.TrimSpace(raw), []byte("data:")) {
+		return providerStreamContent(bytes.NewReader(raw))
+	}
+	var envelope struct {
+		Choices []struct {
+			Message struct {
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return string(raw), nil
+	}
+	if len(envelope.Choices) == 0 {
+		return "", fmt.Errorf("AI 服务返回成功状态但没有 choices 内容")
+	}
+	content := envelope.Choices[0].Message.Content
+	if len(content) == 0 || string(content) == "null" {
+		return "", fmt.Errorf("AI 服务返回的 message.content 为空")
+	}
+	var text string
+	if json.Unmarshal(content, &text) == nil {
+		if strings.TrimSpace(text) == "" {
+			return "", fmt.Errorf("AI 服务返回的 message.content 为空")
+		}
+		return text, nil
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &parts) == nil {
+		var b strings.Builder
+		for _, part := range parts {
+			if part.Text != "" {
+				b.WriteString(part.Text)
+			}
+		}
+		if b.Len() > 0 {
+			return b.String(), nil
+		}
+	}
+	return "", fmt.Errorf("AI 服务返回的 message.content 不是文本")
+}
+
+// providerStreamContent converts OpenAI-compatible SSE chunks into the same
+// assistant text returned by a non-streaming response. A gateway may emit a
+// final regular JSON envelope even when stream=true, so that shape is handled
+// by providerResponseContent before this helper is called.
+func providerStreamContent(r io.Reader) (string, error) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
+	var out strings.Builder
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var envelope struct {
+			Choices []struct {
+				Delta struct {
+					Content json.RawMessage `json:"content"`
+				} `json:"delta"`
+				Message struct {
+					Content json.RawMessage `json:"content"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+			return "", fmt.Errorf("invalid streaming event: %w", err)
+		}
+		for _, choice := range envelope.Choices {
+			content := choice.Delta.Content
+			if len(content) == 0 {
+				content = choice.Message.Content
+			}
+			if text, ok := contentText(content); ok {
+				out.WriteString(text)
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("reading streaming response: %w", err)
+	}
+	if strings.TrimSpace(out.String()) == "" {
+		return "", fmt.Errorf("AI 服务流式响应没有内容")
+	}
+	return out.String(), nil
+}
+
+func contentText(raw json.RawMessage) (string, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text, text != ""
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) == nil {
+		var out strings.Builder
+		for _, part := range parts {
+			out.WriteString(part.Text)
+		}
+		return out.String(), out.Len() > 0
+	}
+	return "", false
+}
+
+func providerHTTPFailure(resp *http.Response) (string, string) {
+	detail := readProviderError(resp.Body)
+	if detail != "" {
+		detail = "（" + detail + "）"
+	}
+	switch resp.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "AI 服务认证失败" + detail + "。", "请检查 AI API Key 是否有效、是否已过期，以及该 Key 是否有模型调用权限。"
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
+		return fmt.Sprintf("AI 请求参数无效（HTTP %d）", resp.StatusCode) + detail + "。", "请检查 Endpoint 路径、模型名称和 OpenAI 兼容参数。"
+	case http.StatusRequestTimeout, http.StatusGatewayTimeout:
+		return fmt.Sprintf("AI 服务处理超时（HTTP %d）", resp.StatusCode) + detail + "。", "AI 服务或中间网关处理超时，请稍后重试或调高网关超时时间。"
+	case http.StatusTooManyRequests:
+		return "AI 服务请求频率受限（HTTP 429）" + detail + "。", "当前调用额度或并发数已达到限制，请稍后重试。"
+	default:
+		if resp.StatusCode >= 500 {
+			return fmt.Sprintf("AI 服务暂时不可用（HTTP %d）", resp.StatusCode) + detail + "。", "AI 服务或其上游发生故障，请稍后重试并检查服务日志。"
+		}
+		return fmt.Sprintf("AI 服务返回错误（HTTP %d）", resp.StatusCode) + detail + "。", "请检查 AI 服务配置并稍后重试。"
+	}
+}
+
+func readProviderError(body io.Reader) string {
+	raw, err := io.ReadAll(io.LimitReader(body, 16*1024))
+	if err != nil || len(raw) == 0 {
+		return ""
+	}
+	var payload struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(raw, &payload) != nil || len(payload.Error) == 0 {
+		return strings.TrimSpace(string(raw))
+	}
+	var message string
+	if json.Unmarshal(payload.Error, &message) == nil {
+		return strings.TrimSpace(message)
+	}
+	var detail struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	}
+	if json.Unmarshal(payload.Error, &detail) == nil {
+		if detail.Message != "" {
+			return strings.TrimSpace(detail.Message)
+		}
+		return strings.TrimSpace(detail.Code)
+	}
+	return strings.TrimSpace(string(payload.Error))
 }
 
 func (w *Worker) loadSource(ctx context.Context, key, filename, mimeType string) (documentInput, error) {

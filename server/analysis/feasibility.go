@@ -296,6 +296,21 @@ func normalizeResult(raw string, planID int64, source documentInput) (Feasibilit
 				}
 			}
 		}
+	} else if byName, ok := items.(map[string]any); ok {
+		// Some models serialize the nine dimensions as an object keyed by
+		// dimension name instead of the array required by the prompt. Normalize
+		// that shape too; otherwise the result looks successful but all scores
+		// silently become zero.
+		for key, rawItem := range byName {
+			if item, ok := rawItem.(map[string]any); ok {
+				if _, exists := item["key"]; !exists {
+					item["key"] = key
+				}
+				if dimension, ok := normalizeDimension(item); ok {
+					out.Dimensions = append(out.Dimensions, dimension)
+				}
+			}
+		}
 	}
 	byKey := make(map[string]DimensionScore, len(out.Dimensions))
 	for _, dimension := range out.Dimensions {
@@ -370,7 +385,7 @@ func normalizeProcess(value any, dimensions []DimensionScore) []AnalysisStep {
 	if list, ok := value.([]any); ok {
 		for _, rawItem := range list {
 			if item, ok := rawItem.(map[string]any); ok {
-				out = append(out, AnalysisStep{Step: firstString(item, "step", "key"), Title: firstString(item, "title", "name"), Status: firstString(item, "status"), Summary: firstString(item, "summary", "reasoning"), Questions: stringSlice(firstValue(item, "questions", "gaps"))})
+				out = append(out, AnalysisStep{Step: firstString(item, "step", "key"), Title: firstString(item, "title", "name"), Status: firstString(item, "status"), Summary: firstString(item, "summary", "content", "reasoning"), Questions: stringSlice(firstValue(item, "questions", "gaps"))})
 			}
 		}
 	}

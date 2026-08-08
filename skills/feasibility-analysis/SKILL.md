@@ -11,17 +11,17 @@ description: Analyze a project proposal from evidence, score each feasibility di
 
 ## 调查维度与权重
 
-| key | 维度 | 权重 | 重点调查 |
-| --- | --- | ---: | --- |
-| problem | 问题与需求 | 15 | 痛点频率、付费意愿、目标用户、需求证据 |
-| market | 市场空间 | 15 | TAM/SAM/SOM、增长、区域、进入时机 |
-| solution | 解决方案与技术 | 12 | 产品价值、技术可行性、交付复杂度、知识产权 |
-| competition | 竞争与差异化 | 12 | 替代方案、竞品、壁垒、护城河 |
-| business_model | 商业模式与财务 | 15 | 收入、成本、毛利、现金流、盈亏平衡 |
-| go_to_market | 获客与运营 | 10 | 渠道、转化、留存、供应链和交付 |
-| legal | 法规与合规 | 8 | 牌照、隐私、数据、合同和地域限制 |
-| team | 团队与执行 | 8 | 关键能力、资源、里程碑、组织风险 |
-| risk | 风险与验证 | 5 | 关键假设、敏感性、最小验证实验和止损线 |
+| key            | 维度           | 权重 | 重点调查                                   |
+| -------------- | -------------- | ---: | ------------------------------------------ |
+| problem        | 问题与需求     |   15 | 痛点频率、付费意愿、目标用户、需求证据     |
+| market         | 市场空间       |   15 | TAM/SAM/SOM、增长、区域、进入时机          |
+| solution       | 解决方案与技术 |   12 | 产品价值、技术可行性、交付复杂度、知识产权 |
+| competition    | 竞争与差异化   |   12 | 替代方案、竞品、壁垒、护城河               |
+| business_model | 商业模式与财务 |   15 | 收入、成本、毛利、现金流、盈亏平衡         |
+| go_to_market   | 获客与运营     |   10 | 渠道、转化、留存、供应链和交付             |
+| legal          | 法规与合规     |    8 | 牌照、隐私、数据、合同和地域限制           |
+| team           | 团队与执行     |    8 | 关键能力、资源、里程碑、组织风险           |
+| risk           | 风险与验证     |    5 | 关键假设、敏感性、最小验证实验和止损线     |
 
 每个维度输出 `score`（0-100）、`confidence`（0-100）、`reasoning`、`evidence[]`、`gaps[]`。最终分数为各维度 `score × weight` 的加权平均，四舍五入到 1 位小数。
 
@@ -53,23 +53,27 @@ description: Analyze a project proposal from evidence, score each feasibility di
   "overall_score": 0,
   "verdict": "有条件可行",
   "summary": "一句话结论",
-  "dimensions": [{
-    "key": "market",
-    "name": "市场空间",
-    "score": 0,
-    "weight": 15,
-    "confidence": 0,
-    "reasoning": "依据与可复核结论",
-    "evidence": ["文件中的事实或来源"],
-    "gaps": ["待验证数据"]
-  }],
-  "analysis_process": [{
-    "step": "market",
-    "title": "市场空间",
-    "status": "completed",
-    "summary": "本步如何调查、得出什么结论",
-    "questions": ["下一步问题"]
-  }],
+  "dimensions": [
+    {
+      "key": "market",
+      "name": "市场空间",
+      "score": 0,
+      "weight": 15,
+      "confidence": 0,
+      "reasoning": "依据与可复核结论",
+      "evidence": ["文件中的事实或来源"],
+      "gaps": ["待验证数据"]
+    }
+  ],
+  "analysis_process": [
+    {
+      "step": "market",
+      "title": "市场空间",
+      "status": "completed",
+      "summary": "本步如何调查、得出什么结论",
+      "questions": ["下一步问题"]
+    }
+  ],
   "next_actions": ["优先级最高的验证动作"]
 }
 ```

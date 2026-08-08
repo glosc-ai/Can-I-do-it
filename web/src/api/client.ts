@@ -22,11 +22,12 @@ export class APIError extends Error {
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   headers.set('Accept', 'application/json')
-  if (init.body) {
+  // Let the browser set the multipart boundary for FormData bodies.
+  if (init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json')
   }
 
-  const response = await fetch(`${apiBaseURL}${path}`, { ...init, headers })
+  const response = await fetch(`${apiBaseURL}${path}`, { ...init, headers, credentials: 'include' })
   if (response.status === 204) {
     return undefined as T
   }

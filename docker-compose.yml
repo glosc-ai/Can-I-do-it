@@ -47,11 +47,24 @@ services:
       JWT_SECRET: ${JWT_SECRET:-replace-this-development-secret-before-production}
       JWT_ISSUER: ${JWT_ISSUER:-go-vue-starter}
       JWT_TTL: ${JWT_TTL:-24h}
+      SSO_DISCOVERY_URL: ${SSO_DISCOVERY_URL:-https://sso.gloscai.com/api/.well-known/openid-configuration}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:3000/api/v1/auth/callback}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-can_i_session}
+      SESSION_TTL: ${SESSION_TTL:-24h}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/data/uploads}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+      AI_ENDPOINT: ${AI_ENDPOINT:-}
+      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
+      AI_API_KEY: ${AI_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - uploads_data:/data/uploads
     ports:
       - "${API_PORT:-8080}:8080"
 
@@ -70,3 +83,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  uploads_data:

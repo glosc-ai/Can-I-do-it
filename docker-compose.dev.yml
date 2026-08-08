@@ -47,10 +47,17 @@ services:
       JWT_SECRET: ${JWT_SECRET:-development-only-secret-change-before-release}
       JWT_ISSUER: go-vue-starter
       JWT_TTL: 24h
+      SSO_DISCOVERY_URL: ${SSO_DISCOVERY_URL:-https://sso.gloscai.com/api/.well-known/openid-configuration}
+      SSO_CLIENT_ID: ${SSO_CLIENT_ID:-}
+      SSO_CLIENT_SECRET: ${SSO_CLIENT_SECRET:-}
+      SSO_REDIRECT_URI: ${SSO_REDIRECT_URI:-http://localhost:5173/api/v1/auth/callback}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+      UPLOAD_DIR: /data/uploads
     volumes:
       - ./server:/app
       - go_modules:/go/pkg/mod
       - go_build_cache:/root/.cache/go-build
+      - uploads_dev_data:/data/uploads
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,3 +94,4 @@ volumes:
   go_modules:
   go_build_cache:
   web_node_modules:
+  uploads_dev_data:

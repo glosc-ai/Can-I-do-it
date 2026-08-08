@@ -10,14 +10,31 @@ import (
 )
 
 type Config struct {
-	Environment string
-	HTTPAddr    string
-	LogLevel    string
-	CORSOrigins []string
-	Database    Database
-	Redis       Redis
-	JWT         JWT
+	Environment   string
+	HTTPAddr      string
+	LogLevel      string
+	CORSOrigins   []string
+	Database      Database
+	Redis         Redis
+	JWT           JWT
+	SSO           SSO
+	Session       Session
+	Storage       Storage
+	AI            AI
+	EncryptionKey string
 }
+
+type SSO struct{ DiscoveryURL, ClientID, ClientSecret, RedirectURI string }
+type Session struct {
+	CookieName string
+	TTL        time.Duration
+	Secure     bool
+}
+type Storage struct {
+	Directory      string
+	MaxUploadBytes int64
+}
+type AI struct{ Endpoint, Model, APIKey string }
 
 type Database struct {
 	Driver          string
@@ -87,6 +104,13 @@ func Load() (Config, error) {
 	if maxOpen < 1 || maxIdle < 0 {
 		return Config{}, fmt.Errorf("database connection limits must be non-negative and DB_MAX_OPEN_CONNS must be positive")
 	}
+	sessionTTL, err := envDuration("SESSION_TTL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if sessionTTL <= 0 {
+		return Config{}, fmt.Errorf("SESSION_TTL must be positive")
+	}
 
 	return Config{
 		Environment: environment,
@@ -111,6 +135,11 @@ func Load() (Config, error) {
 			Issuer: cmp.Or(os.Getenv("JWT_ISSUER"), "go-vue-starter"),
 			TTL:    jwtTTL,
 		},
+		SSO:           SSO{DiscoveryURL: cmp.Or(os.Getenv("SSO_DISCOVERY_URL"), "https://sso.gloscai.com/api/.well-known/openid-configuration"), ClientID: os.Getenv("SSO_CLIENT_ID"), ClientSecret: os.Getenv("SSO_CLIENT_SECRET"), RedirectURI: cmp.Or(os.Getenv("SSO_REDIRECT_URI"), "http://localhost:5173/api/v1/auth/callback")},
+		Session:       Session{CookieName: cmp.Or(os.Getenv("SESSION_COOKIE_NAME"), "can_i_session"), TTL: sessionTTL, Secure: environment == "production"},
+		Storage:       Storage{Directory: cmp.Or(os.Getenv("UPLOAD_DIR"), "/tmp/can-i-do-it/uploads"), MaxUploadBytes: 20 * 1024 * 1024},
+		AI:            AI{Endpoint: os.Getenv("AI_ENDPOINT"), Model: cmp.Or(os.Getenv("AI_MODEL"), "gpt-4o-mini"), APIKey: os.Getenv("AI_API_KEY")},
+		EncryptionKey: os.Getenv("APP_ENCRYPTION_KEY"),
 	}, nil
 }
 

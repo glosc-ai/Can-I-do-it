@@ -26,6 +26,13 @@ type User struct {
 	Role     string `json:"role"`
 	Status   string `json:"status"`
 }
+
+// AdminUser adds account timestamps to the owner-facing user list. updated_at
+// is touched on every SSO login, so it doubles as "last active".
+type AdminUser struct {
+	User
+	UpdatedAt time.Time `json:"updated_at"`
+}
 type Config struct {
 	Driver, DiscoveryURL, ClientID, ClientSecret, RedirectURI, CookieName string
 	TTL                                                                   time.Duration
@@ -252,16 +259,16 @@ func (s *Service) adminUsers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "owner_required", "owner permission required")
 		return
 	}
-	rows, err := s.db.QueryContext(r.Context(), "SELECT id,sso_sub,name,nickname,email,avatar,role,status FROM users ORDER BY id")
+	rows, err := s.db.QueryContext(r.Context(), "SELECT id,sso_sub,name,nickname,email,avatar,role,status,updated_at FROM users ORDER BY id")
 	if err != nil {
 		writeError(w, 500, "internal_error", "could not list users")
 		return
 	}
 	defer rows.Close()
-	items := []User{}
+	items := []AdminUser{}
 	for rows.Next() {
-		var u User
-		if rows.Scan(&u.ID, &u.Sub, &u.Name, &u.Nickname, &u.Email, &u.Avatar, &u.Role, &u.Status) == nil {
+		var u AdminUser
+		if rows.Scan(&u.ID, &u.Sub, &u.Name, &u.Nickname, &u.Email, &u.Avatar, &u.Role, &u.Status, &u.UpdatedAt) == nil {
 			items = append(items, u)
 		}
 	}

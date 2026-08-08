@@ -30,6 +30,7 @@ type Plan struct {
 	Size      int64     `json:"size_bytes"`
 	Version   int       `json:"version"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type Analysis struct {
@@ -64,7 +65,7 @@ func (s *Service) Register(mux *http.ServeMux) {
 }
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
-	rows, e := s.db.QueryContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at FROM business_plans WHERE user_id=? ORDER BY created_at DESC"), u.ID)
+	rows, e := s.db.QueryContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans WHERE user_id=? ORDER BY created_at DESC"), u.ID)
 	if e != nil {
 		errJSON(w, 500, "internal_error", "could not list plans")
 		return
@@ -73,7 +74,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	items := []Plan{}
 	for rows.Next() {
 		var p Plan
-		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt) == nil {
+		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
 			items = append(items, p)
 		}
 	}
@@ -145,7 +146,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	var p Plan
-	e := s.db.QueryRowContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at FROM business_plans WHERE id=? AND user_id=?"), id, u.ID).Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt)
+	e := s.db.QueryRowContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans WHERE id=? AND user_id=?"), id, u.ID).Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt)
 	if e == sql.ErrNoRows {
 		errJSON(w, 404, "not_found", "plan not found")
 		return
@@ -182,7 +183,7 @@ func (s *Service) analyze(w http.ResponseWriter, r *http.Request) {
 		}
 		jobID, _ = res.LastInsertId()
 	}
-	_, _ = s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET status=? WHERE id=?"), "queued", id)
+	_, _ = s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), "queued", id)
 	jsonOut(w, 202, map[string]any{"data": map[string]any{"id": jobID, "status": "queued"}})
 }
 
@@ -247,7 +248,7 @@ func (s *Service) retryAnalysis(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 500, "internal_error", "could not retry analysis")
 		return
 	}
-	_, _ = s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET status=? WHERE id=?"), "queued", id)
+	_, _ = s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), "queued", id)
 	jsonOut(w, 202, map[string]any{"data": map[string]any{"id": jobID, "status": "queued"}})
 }
 
@@ -344,7 +345,7 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 403, "owner_required", "owner permission required")
 		return
 	}
-	rows, e := s.db.QueryContext(r.Context(), "SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at FROM business_plans ORDER BY created_at DESC LIMIT 200")
+	rows, e := s.db.QueryContext(r.Context(), "SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans ORDER BY created_at DESC LIMIT 200")
 	if e != nil {
 		errJSON(w, 500, "internal_error", "could not list plans")
 		return
@@ -353,7 +354,7 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	items := []Plan{}
 	for rows.Next() {
 		var p Plan
-		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt) == nil {
+		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
 			items = append(items, p)
 		}
 	}

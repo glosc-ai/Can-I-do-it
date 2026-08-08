@@ -10,12 +10,12 @@ import {
   TrendingUpIcon,
   TriangleAlertIcon,
 } from '@lucide/vue'
-import AppHeader from '@/components/layout/AppHeader.vue'
+import PublicLayout from '@/components/layout/PublicLayout.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
-  CardAction,
+  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
@@ -71,13 +71,30 @@ const dimensions: Step[] = [
     description: '机会窗口、切入点与下一步行动建议。',
   },
 ]
+
+const reportPreview = [
+  {
+    title: '可行性',
+    text: '方向整体成立：目标客群明确，需求真实存在，但冷启动依赖线下地推，需要预留至少 6 个月的现金流。',
+  },
+  {
+    title: '市场',
+    text: '社区咖啡市场近三年保持稳定增长，3 公里半径内常住人口约 4.2 万，工作日早间时段需求最集中。',
+  },
+  {
+    title: '风险',
+    text: '500 米内已有 3 家连锁品牌；房租占预估营收比例偏高，需在签约前锁定涨幅条款。',
+  },
+  {
+    title: '建议',
+    text: '先以外带窗口验证早间高峰需求，再决定是否扩展堂食区域。',
+  },
+]
 </script>
 
 <template>
-  <div class="min-h-screen bg-background">
-    <AppHeader />
-
-    <main class="mx-auto flex max-w-6xl flex-col gap-16 px-4 py-14 sm:px-6 sm:py-20">
+  <PublicLayout>
+    <div class="mx-auto flex max-w-6xl flex-col gap-16 px-4 py-14 sm:px-6 sm:py-20">
       <section class="flex max-w-3xl flex-col items-start gap-6">
         <Badge variant="outline">
           <SparklesIcon data-icon="inline-start" />
@@ -85,7 +102,7 @@ const dimensions: Step[] = [
         </Badge>
         <div class="flex flex-col gap-4">
           <h1 class="text-4xl font-semibold tracking-tight text-balance sm:text-6xl">
-            Can I Do It
+            我能做这个吗
           </h1>
           <p class="max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
             上传商业计划书，获得市场、竞争、风险与机会的结构化可行性分析，在投入之前先验证想法。
@@ -106,6 +123,37 @@ const dimensions: Step[] = [
         </div>
       </section>
 
+      <section aria-labelledby="report-preview-title" class="flex flex-col gap-6">
+        <div class="flex flex-col gap-2">
+          <h2 id="report-preview-title" class="text-2xl font-semibold tracking-tight">
+            结构化分析报告
+          </h2>
+          <p class="text-sm text-muted-foreground">
+            每份计划书都会得到一份分维度的可行性报告，以下是一份示例片段。
+          </p>
+        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle class="flex flex-wrap items-center gap-3">
+              社区咖啡店商业计划书
+              <Badge>已完成</Badge>
+            </CardTitle>
+            <CardDescription>community-coffee-plan.pdf · 分析用时 42 秒</CardDescription>
+          </CardHeader>
+          <CardContent class="flex flex-col">
+            <div
+              v-for="(section, index) in reportPreview"
+              :key="section.title"
+              class="flex flex-col gap-1 py-4 first:pt-0 last:pb-0"
+            >
+              <h3 class="text-sm font-semibold">{{ section.title }}</h3>
+              <p class="text-sm leading-6 text-muted-foreground">{{ section.text }}</p>
+              <Separator v-if="index < reportPreview.length - 1" class="mt-4" />
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
       <section id="how-it-works" class="flex flex-col gap-6" aria-labelledby="how-it-works-title">
         <div class="flex flex-col gap-2">
           <h2 id="how-it-works-title" class="text-2xl font-semibold tracking-tight">
@@ -118,12 +166,12 @@ const dimensions: Step[] = [
         <div class="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
           <Card v-for="step in steps" :key="step.title">
             <CardHeader>
-              <CardTitle>{{ step.title }}</CardTitle>
-              <CardAction>
+              <CardTitle class="flex items-center gap-2">
                 <span class="flex size-8 items-center justify-center rounded-lg bg-muted">
                   <component :is="step.icon" class="size-4" />
                 </span>
-              </CardAction>
+                {{ step.title }}
+              </CardTitle>
               <CardDescription>{{ step.description }}</CardDescription>
             </CardHeader>
           </Card>
@@ -149,16 +197,6 @@ const dimensions: Step[] = [
           </div>
         </div>
       </section>
-    </main>
-
-    <Separator />
-    <footer>
-      <div
-        class="mx-auto flex max-w-6xl flex-col gap-2 px-4 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6"
-      >
-        <span>Can I Do It</span>
-        <span>先验证，再投入。</span>
-      </div>
-    </footer>
-  </div>
+    </div>
+  </PublicLayout>
 </template>

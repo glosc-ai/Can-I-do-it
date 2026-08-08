@@ -55,7 +55,7 @@ func (w *Worker) process(ctx context.Context) {
 	if e = tx.Commit(); e != nil {
 		return
 	}
-	_, _ = w.db.ExecContext(ctx, w.q("UPDATE business_plans SET status=? WHERE id=?"), "processing", plan)
+	_, _ = w.db.ExecContext(ctx, w.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), "processing", plan)
 	result := map[string]any{"feasibility": "analyzed", "plan_id": plan}
 	jobStatus, failure, summary := "succeeded", "", "AI analysis completed."
 	if endpoint, model, key := w.aiSettings(ctx); endpoint != "" && key != "" {
@@ -104,7 +104,7 @@ func (w *Worker) process(ctx context.Context) {
 	if jobStatus == "failed" {
 		planStatus = "failed"
 	}
-	_, _ = w.db.ExecContext(ctx, w.q("UPDATE business_plans SET status=? WHERE id=?"), planStatus, plan)
+	_, _ = w.db.ExecContext(ctx, w.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), planStatus, plan)
 }
 func (w *Worker) aiSettings(ctx context.Context) (string, string, string) {
 	q := "SELECT `key`,value FROM app_settings"

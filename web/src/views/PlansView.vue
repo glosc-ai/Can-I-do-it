@@ -1,19 +1,14 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { CircleAlertIcon, FileTextIcon, FileUpIcon, PlayIcon, UploadIcon } from '@lucide/vue'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { CircleAlertIcon, FileTextIcon, FileUpIcon, PlayIcon } from '@lucide/vue'
 import { toast } from 'vue-sonner'
-import { analyzePlan, listPlans, uploadPlan, type Plan } from '@/api/plans'
-import AppHeader from '@/components/layout/AppHeader.vue'
+import type { Plan } from '@/api/plans'
+import WorkspaceLayout from '@/components/layout/WorkspaceLayout.vue'
 import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Badge, type BadgeVariants } from '@/components/ui/badge'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   Empty,
   EmptyContent,
@@ -22,16 +17,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-} from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
 import {
   Table,
   TableBody,
@@ -40,232 +26,122 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import PlanStatusBadge from '@/features/plans/components/PlanStatusBadge.vue'
+import UploadDropzone from '@/features/plans/components/UploadDropzone.vue'
+import { usePlansStore } from '@/features/plans/store'
+import { errorMessage, fileTypeLabel, formatSize, formatTime } from '@/lib/format'
 
-const ACCEPTED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.txt']
+const store = usePlansStore()
+const router = useRouter()
+const dropzoneRef = ref<InstanceType<typeof UploadDropzone> | null>(null)
+const analyzingId = ref<number | null>(null)
 
-const STATUS_META: Record<string, { label: string; variant: NonNullable<BadgeVariants['variant']> }> = {
-  uploaded: { label: '待分析', variant: 'secondary' },
-  queued: { label: '排队中', variant: 'outline' },
-  processing: { label: '分析中', variant: 'outline' },
-  completed: { label: '已完成', variant: 'default' },
-  failed: { label: '失败', variant: 'destructive' },
-}
-
-const plans = ref<Plan[]>([])
-const listLoading = ref(true)
-const listError = ref('')
-
-const title = ref('')
-const file = ref<File | null>(null)
-const fileError = ref('')
-const uploading = ref(false)
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : '请求失败，请稍后重试'
-}
-
-function statusMeta(status: string) {
-  return STATUS_META[status] ?? { label: status, variant: 'outline' as const }
-}
-
-function formatSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '-'
-  if (bytes < 1024) return `${bytes} B`
-  const units = ['KB', 'MB', 'GB']
-  let value = bytes
-  let unit = -1
-  do {
-    value /= 1024
-    unit += 1
-  } while (value >= 1024 && unit < units.length - 1)
-  return `${value.toFixed(1)} ${units[unit]}`
-}
-
-function formatTime(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  return date.toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
-async function load() {
-  listLoading.value = true
-  listError.value = ''
+async function onUpload(payload: { file: File; title: string }) {
   try {
-    plans.value = await listPlans()
-  } catch (error) {
-    listError.value = errorMessage(error)
-  } finally {
-    listLoading.value = false
-  }
-}
-
-function isAcceptedFile(candidate: File): boolean {
-  const name = candidate.name.toLowerCase()
-  return ACCEPTED_EXTENSIONS.some(extension => name.endsWith(extension))
-}
-
-function onFileChange(event: Event) {
-  const input = event.target as HTMLInputElement
-  const selected = input.files?.[0] ?? null
-  fileError.value = ''
-
-  if (selected && !isAcceptedFile(selected)) {
-    file.value = null
-    input.value = ''
-    fileError.value = '仅支持 .pdf、.doc、.docx、.txt 格式的文件'
-    return
-  }
-
-  file.value = selected
-  if (selected && !title.value.trim()) {
-    title.value = selected.name.replace(/\.[^.]+$/, '')
-  }
-}
-
-function resetFileInput() {
-  const input = document.getElementById('plan-file') as HTMLInputElement | null
-  if (input) input.value = ''
-}
-
-async function submit() {
-  if (uploading.value) return
-  if (!file.value) {
-    fileError.value = '请选择要上传的文件'
-    return
-  }
-
-  uploading.value = true
-  try {
-    await uploadPlan(file.value, title.value.trim() || file.value.name)
+    await store.upload(payload.file, payload.title)
+    dropzoneRef.value?.reset()
     toast.success('上传成功', { description: '计划书已保存，可以开始分析。' })
-    title.value = ''
-    file.value = null
-    fileError.value = ''
-    resetFileInput()
-    await load()
   } catch (error) {
     toast.error('上传失败', { description: errorMessage(error) })
-  } finally {
-    uploading.value = false
   }
 }
 
 async function analyze(plan: Plan) {
+  if (analyzingId.value !== null) return
+  analyzingId.value = plan.id
   try {
-    await analyzePlan(plan.id)
-    plan.status = 'queued'
-    toast.success('已提交分析', { description: `「${plan.title}」正在排队分析，稍后回来查看结果。` })
+    await store.analyze(plan.id)
+    toast.success('已提交分析', { description: `「${plan.title}」正在排队分析。` })
   } catch (error) {
     toast.error('提交分析失败', { description: errorMessage(error) })
+  } finally {
+    analyzingId.value = null
   }
 }
 
-function focusUploadForm() {
-  const input = document.getElementById('plan-title')
-  input?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  input?.focus()
+function openDetail(plan: Plan) {
+  router.push(`/plans/${plan.id}`)
 }
 
-onMounted(load)
+const statCards = [
+  { key: 'total', label: '全部计划书' },
+  { key: 'active', label: '分析中' },
+  { key: 'completed', label: '已完成' },
+  { key: 'failed', label: '失败' },
+] as const
+
+onMounted(store.fetch)
+onUnmounted(store.stop)
 </script>
 
 <template>
-  <div class="min-h-screen bg-background">
-    <AppHeader />
+  <WorkspaceLayout>
+    <div class="flex flex-col gap-8 px-4 py-8 sm:px-6">
+      <div class="flex flex-wrap items-end justify-between gap-4">
+        <div class="flex flex-col gap-1">
+          <h1 class="text-2xl font-semibold tracking-tight">我的计划书</h1>
+          <p class="text-sm text-muted-foreground">
+            上传商业计划书并提交 AI 可行性分析。
+          </p>
+        </div>
+        <Button variant="outline" @click="dropzoneRef?.focus()">
+          <FileUpIcon data-icon="inline-start" />
+          上传计划书
+        </Button>
+      </div>
 
-    <main class="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-10 sm:px-6">
-      <div class="flex flex-col gap-1">
-        <h1 class="text-2xl font-semibold tracking-tight">商业计划书</h1>
-        <p class="text-sm text-muted-foreground">
-          上传文档并提交 AI 可行性分析，结果会集中展示在这里。
-        </p>
+      <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Card v-for="card in statCards" :key="card.key" size="sm">
+          <CardContent class="flex flex-col gap-1">
+            <span class="text-xs text-muted-foreground">{{ card.label }}</span>
+            <span class="text-2xl font-semibold tabular-nums">
+              <Skeleton v-if="!store.loaded && store.loading" class="inline-block h-7 w-10" />
+              <template v-else>{{ store.stats[card.key] }}</template>
+            </span>
+          </CardContent>
+        </Card>
       </div>
 
       <Card>
-        <CardHeader>
-          <CardTitle>上传计划书</CardTitle>
-          <CardDescription>支持 PDF、Word 和 TXT 文件，上传后可随时发起分析。</CardDescription>
-        </CardHeader>
         <CardContent>
-          <form @submit.prevent="submit">
-            <FieldGroup>
-              <Field>
-                <FieldLabel for="plan-title">标题</FieldLabel>
-                <Input
-                  id="plan-title"
-                  v-model="title"
-                  placeholder="例如：社区咖啡店商业计划书"
-                />
-              </Field>
-              <Field :data-invalid="fileError ? 'true' : undefined">
-                <FieldLabel for="plan-file">文件</FieldLabel>
-                <Input
-                  id="plan-file"
-                  type="file"
-                  accept=".pdf,.doc,.docx,.txt"
-                  :aria-invalid="fileError ? 'true' : undefined"
-                  @change="onFileChange"
-                />
-                <FieldDescription>仅支持 .pdf、.doc、.docx、.txt 格式。</FieldDescription>
-                <FieldError v-if="fileError">{{ fileError }}</FieldError>
-              </Field>
-              <div>
-                <Button type="submit" :disabled="uploading">
-                  <Spinner v-if="uploading" data-icon="inline-start" />
-                  <UploadIcon v-else data-icon="inline-start" />
-                  {{ uploading ? '上传中…' : '上传计划书' }}
-                </Button>
-              </div>
-            </FieldGroup>
-          </form>
+          <UploadDropzone ref="dropzoneRef" :uploading="store.uploading" @submit="onUpload" />
         </CardContent>
       </Card>
 
       <section class="flex flex-col gap-3" aria-labelledby="plans-list-title">
-        <div class="flex items-center justify-between gap-4">
-          <h2 id="plans-list-title" class="text-lg font-semibold tracking-tight">
-            我的计划书
-          </h2>
-          <span v-if="!listLoading && !listError" class="text-sm text-muted-foreground">
-            共 {{ plans.length }} 份
-          </span>
-        </div>
+        <h2 id="plans-list-title" class="text-lg font-semibold tracking-tight">
+          计划书列表
+        </h2>
 
-        <Alert v-if="listError" variant="destructive">
+        <Alert v-if="store.error && !store.loading" variant="destructive">
           <CircleAlertIcon />
           <AlertTitle>加载失败</AlertTitle>
-          <AlertDescription>{{ listError }}</AlertDescription>
+          <AlertDescription>{{ store.error }}</AlertDescription>
           <AlertAction>
-            <Button variant="outline" size="sm" @click="load">
+            <Button variant="outline" size="sm" @click="store.fetch">
               重试
             </Button>
           </AlertAction>
         </Alert>
 
         <template v-else>
-          <div v-if="listLoading || plans.length > 0" class="rounded-lg border">
+          <div v-if="!store.loaded || store.items.length > 0" class="overflow-x-auto rounded-lg border">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>标题</TableHead>
-                  <TableHead>文件名</TableHead>
+                  <TableHead>类型</TableHead>
                   <TableHead>大小</TableHead>
                   <TableHead>版本</TableHead>
                   <TableHead>状态</TableHead>
-                  <TableHead>上传时间</TableHead>
+                  <TableHead>更新时间</TableHead>
                   <TableHead class="text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody v-if="listLoading && plans.length === 0">
+              <TableBody v-if="!store.loaded">
                 <TableRow v-for="row in 3" :key="row">
                   <TableCell><Skeleton class="h-4 w-32" /></TableCell>
-                  <TableCell><Skeleton class="h-4 w-40" /></TableCell>
+                  <TableCell><Skeleton class="h-5 w-10" /></TableCell>
                   <TableCell><Skeleton class="h-4 w-12" /></TableCell>
                   <TableCell><Skeleton class="h-5 w-8" /></TableCell>
                   <TableCell><Skeleton class="h-5 w-14" /></TableCell>
@@ -274,40 +150,44 @@ onMounted(load)
                 </TableRow>
               </TableBody>
               <TableBody v-else>
-                <TableRow v-for="plan in plans" :key="plan.id">
+                <TableRow
+                  v-for="plan in store.items"
+                  :key="plan.id"
+                  class="cursor-pointer"
+                  @click="openDetail(plan)"
+                >
                   <TableCell>
-                    <span class="block max-w-40 truncate font-medium sm:max-w-64">
-                      {{ plan.title }}
-                    </span>
+                    <div class="flex flex-col">
+                      <span class="max-w-40 truncate font-medium sm:max-w-64">{{ plan.title }}</span>
+                      <span class="max-w-40 truncate text-xs text-muted-foreground sm:max-w-64">{{ plan.filename }}</span>
+                    </div>
                   </TableCell>
                   <TableCell>
-                    <span class="block max-w-40 truncate text-muted-foreground sm:max-w-56">
-                      {{ plan.filename }}
-                    </span>
+                    <Badge variant="secondary">{{ fileTypeLabel(plan.filename, plan.mime_type) }}</Badge>
                   </TableCell>
-                  <TableCell class="text-muted-foreground">
-                    {{ formatSize(plan.size_bytes) }}
-                  </TableCell>
+                  <TableCell class="text-muted-foreground">{{ formatSize(plan.size_bytes) }}</TableCell>
                   <TableCell>
                     <Badge variant="outline">v{{ plan.version }}</Badge>
                   </TableCell>
                   <TableCell>
-                    <Badge :variant="statusMeta(plan.status).variant">
-                      {{ statusMeta(plan.status).label }}
-                    </Badge>
+                    <PlanStatusBadge :status="plan.status" />
                   </TableCell>
                   <TableCell class="text-muted-foreground">
-                    {{ formatTime(plan.created_at) }}
+                    {{ formatTime(plan.updated_at || plan.created_at) }}
                   </TableCell>
                   <TableCell class="text-right">
                     <Button
                       v-if="plan.status === 'uploaded'"
                       variant="outline"
                       size="sm"
-                      @click="analyze(plan)"
+                      :disabled="analyzingId !== null"
+                      @click.stop="analyze(plan)"
                     >
                       <PlayIcon data-icon="inline-start" />
                       开始分析
+                    </Button>
+                    <Button v-else variant="ghost" size="sm" @click.stop="openDetail(plan)">
+                      查看详情
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -326,7 +206,7 @@ onMounted(load)
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
-              <Button variant="outline" size="sm" @click="focusUploadForm">
+              <Button variant="outline" size="sm" @click="dropzoneRef?.focus()">
                 <FileUpIcon data-icon="inline-start" />
                 上传第一份计划书
               </Button>
@@ -334,6 +214,6 @@ onMounted(load)
           </Empty>
         </template>
       </section>
-    </main>
-  </div>
+    </div>
+  </WorkspaceLayout>
 </template>

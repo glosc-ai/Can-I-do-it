@@ -24,6 +24,11 @@ type Config struct {
 	EncryptionKey string
 }
 
+// developmentEncryptionKey keeps locally persisted settings decryptable across
+// restarts when APP_ENCRYPTION_KEY has not been provided. It must never be used
+// in production; production deployments should always set a random key.
+const developmentEncryptionKey = "development-only-key-32-bytes!!!"
+
 type SSO struct{ DiscoveryURL, ClientID, ClientSecret, RedirectURI string }
 type Session struct {
 	CookieName string
@@ -112,6 +117,11 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("SESSION_TTL must be positive")
 	}
 
+	encryptionKey := os.Getenv("APP_ENCRYPTION_KEY")
+	if encryptionKey == "" && environment != "production" {
+		encryptionKey = developmentEncryptionKey
+	}
+
 	return Config{
 		Environment: environment,
 		HTTPAddr:    cmp.Or(os.Getenv("HTTP_ADDR"), ":8080"),
@@ -139,7 +149,7 @@ func Load() (Config, error) {
 		Session:       Session{CookieName: cmp.Or(os.Getenv("SESSION_COOKIE_NAME"), "can_i_session"), TTL: sessionTTL, Secure: environment == "production"},
 		Storage:       Storage{Directory: cmp.Or(os.Getenv("UPLOAD_DIR"), "/tmp/can-i-do-it/uploads"), MaxUploadBytes: 20 * 1024 * 1024},
 		AI:            AI{Endpoint: os.Getenv("AI_ENDPOINT"), Model: cmp.Or(os.Getenv("AI_MODEL"), "gpt-4o-mini"), APIKey: os.Getenv("AI_API_KEY")},
-		EncryptionKey: os.Getenv("APP_ENCRYPTION_KEY"),
+		EncryptionKey: encryptionKey,
 	}, nil
 }
 

@@ -10,6 +10,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("DB_DRIVER", "")
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("JWT_SECRET", "")
+	t.Setenv("APP_ENCRYPTION_KEY", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -20,6 +21,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.JWT.TTL != 24*time.Hour {
 		t.Fatalf("JWT.TTL = %s, want 24h", cfg.JWT.TTL)
+	}
+	if len(cfg.EncryptionKey) != 32 {
+		t.Fatalf("EncryptionKey length = %d, want 32", len(cfg.EncryptionKey))
 	}
 }
 

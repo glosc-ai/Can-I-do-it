@@ -47,9 +47,12 @@
 | POST | `/api/v1/plans` | 登录 | 上传计划书 |
 | GET | `/api/v1/plans/{id}` | 登录 | 获取自己的单个计划书 |
 | POST | `/api/v1/plans/{id}/analyze` | 登录 | 创建异步分析任务 |
+| GET | `/api/v1/plans/{id}/analysis` | 登录 | 获取计划书的最新分析任务 |
+| POST | `/api/v1/plans/{id}/analysis/retry` | 登录 | 重新入队失败的分析任务 |
 | GET | `/api/v1/admin/users` | Owner | 获取全部用户 |
 | PATCH | `/api/v1/admin/users/{id}` | Owner | 启用或禁用普通用户 |
 | GET | `/api/v1/admin/plans` | Owner | 获取全部计划书 |
+| GET | `/api/v1/admin/analysis` | Owner | 分页获取全部分析任务 |
 | GET | `/api/v1/admin/settings/ai` | Owner | 获取 AI 服务配置 |
 | PATCH | `/api/v1/admin/settings/ai` | Owner | 更新 AI 服务配置 |
 
@@ -167,21 +170,24 @@
 
 ## 商业计划书
 
-当前计划书响应字段由 Go 结构体直接序列化：
+计划书对象（JSON 字段统一为 snake_case）：
 
 ```json
 {
-  "ID": 1,
-  "UserID": 1,
-  "Title": "创业计划书",
-  "Filename": "plan.pdf",
-  "MimeType": "application/pdf",
-  "Status": "uploaded",
-  "Size": 102400,
-  "Version": 1,
-  "created_at": "2026-08-08T12:00:00Z"
+  "id": 1,
+  "user_id": 1,
+  "title": "创业计划书",
+  "filename": "plan.pdf",
+  "mime_type": "application/pdf",
+  "status": "uploaded",
+  "size_bytes": 102400,
+  "version": 1,
+  "created_at": "2026-08-08T12:00:00Z",
+  "updated_at": "2026-08-08T12:00:00Z"
 }
 ```
+
+`status` 取值：`uploaded`（待分析）、`queued`（排队中）、`processing`（分析中）、`completed`（已完成）、`failed`（失败）。
 
 ### `GET /api/v1/plans`
 
@@ -225,7 +231,30 @@ curl -X POST http://localhost:5173/api/v1/plans \
 
 不存在返回 `404 not_found`，不属于当前用户返回 `403 forbidden`。
 
-当前尚未提供单独查询分析任务或分析结果的 HTTP 接口。
+### `GET /api/v1/plans/{id}/analysis`
+
+返回当前用户计划书的最新一条分析任务；从未分析过时 `data` 为 `null`：
+
+```json
+{
+  "data": {
+    "id": 12,
+    "plan_id": 1,
+    "status": "succeeded",
+    "error": "",
+    "summary": "AI analysis completed.",
+    "result": {"feasibility": "..."},
+    "created_at": "2026-08-08T12:00:00Z",
+    "updated_at": "2026-08-08T12:01:00Z"
+  }
+}
+```
+
+任务 `status` 取值：`queued`、`running`、`succeeded`、`failed`。`result` 为 AI 返回的结构化 JSON，失败时为空。计划书不存在或不属于当前用户时统一返回 `404 not_found`。
+
+### `POST /api/v1/plans/{id}/analysis/retry`
+
+将最新一条 `failed` 分析任务重新置为 `queued`。仅计划书所属用户或 Owner 可操作。无请求体，成功返回 `202` 和任务 id；没有失败任务时返回 `409 not_retryable`，无权操作返回 `403 forbidden`。
 
 ## Owner 管理接口
 
@@ -237,7 +266,7 @@ curl -X POST http://localhost:5173/api/v1/plans \
 {"data":[]}
 ```
 
-用户对象格式与 `/auth/me` 相同；SSO `sub` 不会返回。
+用户对象在 `/auth/me` 格式基础上增加 `updated_at`（每次 SSO 登录都会刷新，可视为最近活跃时间）；SSO `sub` 不会返回。
 
 ### `PATCH /api/v1/admin/users/{id}`
 
@@ -262,6 +291,37 @@ Owner 账号不可禁用，尝试操作时返回 `422 owner_protected`。
 ```json
 {"data":[]}
 ```
+
+### `GET /api/v1/admin/analysis`
+
+分页返回全部用户的分析任务，按更新时间倒序。查询参数：
+
+| 参数 | 必填 | 说明 |
+| --- | --- | --- |
+| `status` | 否 | 按任务状态筛选：`queued`、`running`、`succeeded`、`failed` |
+| `page` | 否 | 页码，默认 1 |
+| `page_size` | 否 | 每页条数，默认 25，最大 100 |
+
+```json
+{
+  "data": [
+    {
+      "id": 12,
+      "plan_id": 1,
+      "status": "failed",
+      "error": "could not reach AI provider",
+      "summary": "AI analysis failed.",
+      "created_at": "2026-08-08T12:00:00Z",
+      "updated_at": "2026-08-08T12:01:00Z",
+      "user_id": 1,
+      "plan_title": "创业计划书"
+    }
+  ],
+  "meta": {"page": 1, "page_size": 25, "total": 1}
+}
+```
+
+`status` 非法时返回 `400 invalid_status`。
 
 ### `GET /api/v1/admin/settings/ai`
 
@@ -291,7 +351,7 @@ API Key 永不返回明文：
 
 - `Endpoint` 和 `Model` 必填。
 - `APIKey` 为空时保留已保存的密钥。
-- 保存新密钥要求 `APP_ENCRYPTION_KEY` 是 32 字节，否则返回 `503 encryption_not_configured`。
+- 保存新密钥要求 `APP_ENCRYPTION_KEY` 是 32 字节，否则返回 `503 encryption_not_configured`。开发环境未配置时会使用内置的 32 字节开发密钥；生产环境必须显式配置随机密钥。
 - 成功返回 `200`；响应中的 `has_api_key` 当前为字符串 `"true"` 或 `"false"`。
 
 ## 浏览器调用示例

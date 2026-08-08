@@ -45,7 +45,7 @@
 | PATCH | `/api/v1/tasks/{id}` | 登录 | 更新任务完成状态 |
 | DELETE | `/api/v1/tasks/{id}` | 登录 | 删除任务 |
 | GET | `/api/v1/plans` | 登录 | 获取自己的计划书 |
-| POST | `/api/v1/plans` | 登录 | 上传计划书 |
+| POST | `/api/v1/plans` | 登录 | 上传计划书或图片 |
 | GET | `/api/v1/plans/{id}` | 登录 | 获取自己的单个计划书 |
 | POST | `/api/v1/plans/{id}/analyze` | 登录 | 创建异步分析任务 |
 | GET | `/api/v1/plans/{id}/analysis` | 登录 | 获取计划书的最新分析任务 |
@@ -216,10 +216,10 @@
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `file` | 是 | 计划书文件，当前最大 20 MiB |
+| `file` | 是 | 计划书文件或图片，当前最大 20 MiB；支持 PDF、DOC/DOCX、TXT/Markdown、PNG/JPG/WEBP |
 | `title` | 否 | 标题；为空时使用原始文件名 |
 
-成功返回 `201` 和计划书对象。可能错误：`400 file_required`、`413 file_too_large`、`500 storage_error`。
+成功返回 `201` 和计划书对象。可能错误：`400 file_required`、`400 unsupported_file_type`、`413 file_too_large`、`500 storage_error`。
 
 示例：
 
@@ -258,14 +258,22 @@ curl -X POST http://localhost:5173/api/v1/plans \
     "status": "succeeded",
     "error": "",
     "summary": "AI analysis completed.",
-    "result": {"feasibility": "..."},
+    "overall_score": 68.5,
+    "verdict": "有条件可行",
+    "dimensions": [
+      {"key":"market","name":"市场空间","score":72,"weight":15,"confidence":64,"reasoning":"…","evidence":["…"],"gaps":["…"]}
+    ],
+    "analysis_process": [
+      {"step":"market","title":"市场空间","status":"completed","summary":"检查了市场规模与增长证据","questions":["还需验证…"]}
+    ],
+    "result": {"overall_score": 68.5, "dimensions": [{"key":"market","score":72}], "analysis_process": []},
     "created_at": "2026-08-08T12:00:00Z",
     "updated_at": "2026-08-08T12:01:00Z"
   }
 }
 ```
 
-任务 `status` 取值：`queued`、`running`、`succeeded`、`failed`。`result` 为 AI 返回的结构化 JSON，失败时为空。计划书不存在或不属于当前用户时统一返回 `404 not_found`。
+任务 `status` 取值：`queued`、`running`、`succeeded`、`failed`。Worker 会从对象存储读取并解析上传内容：DOCX/TXT/Markdown/PDF 提取文字，图片发送给视觉模型。`result` 为规范化后的结构化 JSON；九个维度的分数也会写入 `analysis_dimension_scores` 表，失败时为空。计划书不存在或不属于当前用户时统一返回 `404 not_found`。
 
 ### `POST /api/v1/plans/{id}/analysis/retry`
 

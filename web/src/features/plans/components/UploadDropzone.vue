@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { fileTypeLabel, formatSize } from '@/lib/format'
 
-const ACCEPTED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.txt']
+const ACCEPTED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.txt', '.md', '.png', '.jpg', '.jpeg', '.webp']
 
 const props = defineProps<{ uploading: boolean }>()
 const emit = defineEmits<{ submit: [{ file: File; title: string }] }>()
@@ -28,7 +28,7 @@ function select(candidate: File | null | undefined) {
   if (!isAccepted(candidate)) {
     file.value = null
     if (inputRef.value) inputRef.value.value = ''
-    fileError.value = '仅支持 .pdf、.doc、.docx、.txt 格式的文件'
+    fileError.value = '仅支持 PDF、Word、TXT/Markdown 以及 PNG、JPG、WEBP 图片'
     return
   }
   file.value = candidate
@@ -96,7 +96,7 @@ defineExpose({ reset, focus: () => inputRef.value?.click() })
           <CloudUploadIcon class="size-5" />
         </span>
         <span class="text-sm font-medium">拖拽文件到这里，或点击选择</span>
-        <span class="text-xs text-muted-foreground">支持 .pdf、.doc、.docx、.txt，单个文件最大 20 MB</span>
+        <span class="text-xs text-muted-foreground">支持 PDF、Word、TXT/Markdown 和 PNG、JPG、WEBP，单个文件最大 20 MB</span>
       </template>
     </button>
     <input
@@ -104,7 +104,7 @@ defineExpose({ reset, focus: () => inputRef.value?.click() })
       ref="inputRef"
       type="file"
       class="hidden"
-      accept=".pdf,.doc,.docx,.txt"
+      accept=".pdf,.doc,.docx,.txt,.md,.png,.jpg,.jpeg,.webp"
       :aria-invalid="fileError ? 'true' : undefined"
       @change="onFileChange"
     >

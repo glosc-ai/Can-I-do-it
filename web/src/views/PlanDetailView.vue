@@ -242,7 +242,7 @@ onUnmounted(clearPoll)
               <CardDescription v-if="analysis.summary">{{ analysis.summary }}</CardDescription>
             </CardHeader>
             <CardContent>
-              <AnalysisResult :result="analysis.result" />
+              <AnalysisResult :result="analysis.result || analysis" />
             </CardContent>
           </Card>
         </template>

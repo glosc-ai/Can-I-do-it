@@ -24,8 +24,31 @@ export interface Analysis {
   error?: string
   summary?: string
   result?: unknown
+  overall_score?: number
+  verdict?: string
+  dimensions?: AnalysisDimension[]
+  analysis_process?: AnalysisStep[]
   created_at: string
   updated_at: string
+}
+
+export interface AnalysisDimension {
+  key: string
+  name: string
+  score: number
+  weight: number
+  confidence: number
+  reasoning: string
+  evidence: string[]
+  gaps: string[]
+}
+
+export interface AnalysisStep {
+  step: string
+  title: string
+  status: string
+  summary: string
+  questions: string[]
 }
 
 export async function listPlans() {

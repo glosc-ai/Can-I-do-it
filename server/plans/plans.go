@@ -40,14 +40,37 @@ type Plan struct {
 }
 
 type Analysis struct {
-	ID        int64           `json:"id"`
-	PlanID    int64           `json:"plan_id"`
-	Status    string          `json:"status"`
-	Error     string          `json:"error,omitempty"`
-	Summary   string          `json:"summary,omitempty"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	ID           int64           `json:"id"`
+	PlanID       int64           `json:"plan_id"`
+	Status       string          `json:"status"`
+	Error        string          `json:"error,omitempty"`
+	Summary      string          `json:"summary,omitempty"`
+	Result       json.RawMessage `json:"result,omitempty"`
+	OverallScore *float64        `json:"overall_score,omitempty"`
+	Verdict      string          `json:"verdict,omitempty"`
+	Dimensions   []Dimension     `json:"dimensions,omitempty"`
+	Process      []Step          `json:"analysis_process,omitempty"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+type Dimension struct {
+	Key        string   `json:"key"`
+	Name       string   `json:"name"`
+	Score      float64  `json:"score"`
+	Weight     float64  `json:"weight"`
+	Confidence float64  `json:"confidence"`
+	Reasoning  string   `json:"reasoning"`
+	Evidence   []string `json:"evidence"`
+	Gaps       []string `json:"gaps"`
+}
+
+type Step struct {
+	Step      string   `json:"step"`
+	Title     string   `json:"title"`
+	Status    string   `json:"status"`
+	Summary   string   `json:"summary"`
+	Questions []string `json:"questions"`
 }
 
 type AdminAnalysis struct {
@@ -114,6 +137,10 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 413, "file_too_large", "file is too large")
 		return
 	}
+	if !supportedPlanFile(header.Filename, header.Header.Get("Content-Type")) {
+		errJSON(w, 400, "unsupported_file_type", "supported formats are PDF, DOC, DOCX, TXT, Markdown, PNG, JPG, and WEBP")
+		return
+	}
 	key := fmt.Sprintf("users/%d/upload/%d-%s", u.ID, time.Now().UnixNano(), safeFilename(header.Filename))
 	if e = s.store.Put(r.Context(), key, file, header.Size, header.Header.Get("Content-Type")); e != nil {
 		errJSON(w, 500, storage.HTTPErrorCode(e), "could not save file")
@@ -168,6 +195,17 @@ func safeFilename(filename string) string {
 		}
 		return '-'
 	}, filename)
+}
+
+func supportedPlanFile(filename, mimeType string) bool {
+	name := strings.ToLower(strings.TrimSpace(filename))
+	for _, extension := range []string{".pdf", ".doc", ".docx", ".txt", ".md", ".png", ".jpg", ".jpeg", ".webp"} {
+		if strings.HasSuffix(name, extension) {
+			return true
+		}
+	}
+	mimeType = strings.ToLower(strings.TrimSpace(mimeType))
+	return strings.HasPrefix(mimeType, "image/") || strings.Contains(mimeType, "pdf") || strings.Contains(mimeType, "word") || strings.HasPrefix(mimeType, "text/")
 }
 func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
@@ -272,7 +310,7 @@ func (s *Service) retryAnalysis(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if _, err := s.db.ExecContext(r.Context(), s.q("UPDATE analysis_jobs SET status=?,error='',summary='',result=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='failed'"), "queued", jobID); err != nil {
+	if _, err := s.db.ExecContext(r.Context(), s.q("UPDATE analysis_jobs SET status=?,error='',summary='',result=NULL,overall_score=NULL,verdict='',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='failed'"), "queued", jobID); err != nil {
 		errJSON(w, 500, "internal_error", "could not retry analysis")
 		return
 	}
@@ -284,14 +322,40 @@ func (s *Service) latestAnalysis(ctx context.Context, planID int64) (Analysis, e
 	var a Analysis
 	var raw []byte
 	var errText, summary sql.NullString
+	var score sql.NullFloat64
+	var verdict sql.NullString
 	var created, updated sql.NullTime
-	err := s.db.QueryRowContext(ctx, s.q("SELECT id,plan_id,status,error,summary,result,created_at,updated_at FROM analysis_jobs WHERE plan_id=? ORDER BY id DESC LIMIT 1"), planID).Scan(&a.ID, &a.PlanID, &a.Status, &errText, &summary, &raw, &created, &updated)
+	err := s.db.QueryRowContext(ctx, s.q("SELECT id,plan_id,status,error,summary,result,overall_score,verdict,created_at,updated_at FROM analysis_jobs WHERE plan_id=? ORDER BY id DESC LIMIT 1"), planID).Scan(&a.ID, &a.PlanID, &a.Status, &errText, &summary, &raw, &score, &verdict, &created, &updated)
 	if err != nil {
 		return Analysis{}, err
 	}
 	a.Error, a.Summary = errText.String, summary.String
+	if score.Valid {
+		a.OverallScore = &score.Float64
+	}
+	a.Verdict = verdict.String
 	if len(raw) > 0 {
 		a.Result = json.RawMessage(raw)
+		var details struct {
+			OverallScore *float64    `json:"overall_score"`
+			Verdict      string      `json:"verdict"`
+			Dimensions   []Dimension `json:"dimensions"`
+			Process      []Step      `json:"analysis_process"`
+		}
+		if json.Unmarshal(raw, &details) == nil {
+			if details.OverallScore != nil {
+				a.OverallScore = details.OverallScore
+			}
+			if details.Verdict != "" {
+				a.Verdict = details.Verdict
+			}
+			if len(details.Dimensions) > 0 {
+				a.Dimensions = details.Dimensions
+			}
+			if len(details.Process) > 0 {
+				a.Process = details.Process
+			}
+		}
 	}
 	if created.Valid {
 		a.CreatedAt = created.Time
@@ -336,7 +400,7 @@ func (s *Service) adminAnalysis(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, 500, "internal_error", "could not count analyses")
 		return
 	}
-	query := "SELECT j.id,j.plan_id,j.status,j.error,j.summary,j.result,j.created_at,j.updated_at,p.user_id,p.title FROM analysis_jobs j JOIN business_plans p ON p.id=j.plan_id" + where + " ORDER BY j.updated_at DESC LIMIT ? OFFSET ?"
+	query := "SELECT j.id,j.plan_id,j.status,j.error,j.summary,j.result,j.overall_score,j.verdict,j.created_at,j.updated_at,p.user_id,p.title FROM analysis_jobs j JOIN business_plans p ON p.id=j.plan_id" + where + " ORDER BY j.updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(r.Context(), s.q(query), args...)
 	if err != nil {
@@ -349,10 +413,16 @@ func (s *Service) adminAnalysis(w http.ResponseWriter, r *http.Request) {
 		var a AdminAnalysis
 		var raw []byte
 		var errText, summary sql.NullString
+		var score sql.NullFloat64
+		var verdict sql.NullString
 		var created, updated sql.NullTime
-		if rows.Scan(&a.ID, &a.PlanID, &a.Status, &errText, &summary, &raw, &created, &updated, &a.UserID, &a.PlanTitle) == nil {
+		if rows.Scan(&a.ID, &a.PlanID, &a.Status, &errText, &summary, &raw, &score, &verdict, &created, &updated, &a.UserID, &a.PlanTitle) == nil {
 			a.Error = errText.String
 			a.Summary = summary.String
+			if score.Valid {
+				a.OverallScore = &score.Float64
+			}
+			a.Verdict = verdict.String
 			if len(raw) > 0 {
 				a.Result = json.RawMessage(raw)
 			}

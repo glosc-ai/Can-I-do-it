@@ -67,7 +67,7 @@ func run(ctx context.Context) error {
 	plans.NewWithStorage(db, cfg.Database.Driver, objectStore, assetService, cfg.Storage.MaxUploadBytes).Register(mux)
 	assetService.Register(mux)
 	settings.New(db, cfg.Database.Driver, cfg.EncryptionKey, objectStore).Register(mux)
-	go analysis.NewWorker(db, cfg.Database.Driver, cfg.EncryptionKey, assetService).Run(ctx)
+	go analysis.NewWorkerWithStorage(db, cfg.Database.Driver, cfg.EncryptionKey, objectStore, cfg.Storage.MaxUploadBytes, assetService).Run(ctx)
 
 	handler := withRecovery(logger,
 		withSecurityHeaders(

@@ -32,6 +32,11 @@ const EXTENSION_LABELS: Record<string, string> = {
   doc: 'Word',
   docx: 'Word',
   txt: 'TXT',
+  md: 'Markdown',
+  png: '图片',
+  jpg: '图片',
+  jpeg: '图片',
+  webp: '图片',
 }
 
 export function fileTypeLabel(filename: string, mimeType?: string): string {
@@ -40,5 +45,6 @@ export function fileTypeLabel(filename: string, mimeType?: string): string {
   if (mimeType && mimeType.includes('pdf')) return 'PDF'
   if (mimeType && mimeType.includes('word')) return 'Word'
   if (mimeType && mimeType.startsWith('text/')) return 'TXT'
+  if (mimeType && mimeType.startsWith('image/')) return '图片'
   return extension ? extension.toUpperCase() : '文件'
 }

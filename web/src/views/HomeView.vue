@@ -184,7 +184,7 @@ const reportPreview = [
             分析维度
           </h2>
           <p class="text-sm text-muted-foreground">
-            每份计划书都会从四个维度得到结构化反馈。
+            每份材料都会从九个维度得到结构化反馈，并按权重计算综合分数。
           </p>
         </div>
         <div class="grid gap-6 sm:grid-cols-2 md:grid-cols-4">

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import {
-  FileTextIcon,
   LightbulbIcon,
   LogOutIcon,
   MoonIcon,
@@ -48,13 +47,13 @@ async function signOut() {
 
       <nav class="flex items-center gap-1" aria-label="主导航">
         <template v-if="auth.user">
-          <Button variant="ghost" size="sm" as="a" href="/plans">
-            <FileTextIcon data-icon="inline-start" />
-            计划书
+          <Button variant="ghost" size="sm" as="a" href="/plans" aria-label="分析工作台">
+            <LightbulbIcon data-icon="inline-start" />
+            <span class="hidden md:inline">分析工作台</span>
           </Button>
-          <Button v-if="auth.user.role === 'owner'" variant="ghost" size="sm" as="a" href="/admin/users">
+          <Button v-if="auth.user.role === 'owner'" variant="ghost" size="sm" as="a" href="/admin/users" aria-label="后台">
             <ShieldIcon data-icon="inline-start" />
-            后台
+            <span class="hidden md:inline">后台</span>
           </Button>
         </template>
 

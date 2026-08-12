@@ -16,6 +16,10 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/idea',
+      redirect: '/plans',
+    },
+    {
       path: '/plans/:id',
       name: 'plan-detail',
       component: () => import('@/views/PlanDetailView.vue'),

@@ -50,6 +50,7 @@ const canAnalyze = computed(
 )
 const canRetry = computed(() => analysis.value?.status === 'failed')
 const canReanalyze = computed(() => analysis.value?.status === 'succeeded')
+const isIdea = computed(() => plan.value?.filename === 'idea-analysis.txt')
 
 function clearPoll() {
   if (pollTimer !== null) {
@@ -183,14 +184,14 @@ onUnmounted(clearPoll)
         <div class="grid items-start gap-4 lg:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>文件信息</CardTitle>
-              <CardDescription>计划书的基本信息与版本。</CardDescription>
+              <CardTitle>{{ isIdea ? '想法信息' : '文件信息' }}</CardTitle>
+              <CardDescription>{{ isIdea ? '本次想法分析的来源信息。' : '计划书的基本信息与版本。' }}</CardDescription>
             </CardHeader>
             <CardContent>
               <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
                 <dt class="text-muted-foreground">类型</dt>
-                <dd><Badge variant="secondary">{{ fileTypeLabel(plan.filename, plan.mime_type) }}</Badge></dd>
-                <dt class="text-muted-foreground">大小</dt>
+                <dd><Badge variant="secondary">{{ isIdea ? '文字想法' : fileTypeLabel(plan.filename, plan.mime_type) }}</Badge></dd>
+                <dt class="text-muted-foreground">{{ isIdea ? '内容大小' : '大小' }}</dt>
                 <dd>{{ formatSize(plan.size_bytes) }}</dd>
                 <dt class="text-muted-foreground">版本</dt>
                 <dd><Badge variant="outline">v{{ plan.version }}</Badge></dd>

@@ -34,8 +34,8 @@ interface Step {
 const steps: Step[] = [
   {
     icon: FileUpIcon,
-    title: '上传计划书',
-    description: '支持 PDF、Word 和 TXT 文档，每次上传都会保留版本记录。',
+    title: '描述想法或上传材料',
+    description: '可以直接输入几句话，也可以上传 PDF、Word 和 TXT 计划书。',
   },
   {
     icon: SparklesIcon,
@@ -105,16 +105,16 @@ const reportPreview = [
             我能做这个吗
           </h1>
           <p class="max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
-            上传商业计划书，获得市场、竞争、风险与机会的结构化可行性分析，在投入之前先验证想法。
+            输入一个想法或上传商业计划书，获得市场、竞争、风险与机会的结构化可行性分析，在投入之前先验证方向。
           </p>
         </div>
         <div class="flex flex-wrap gap-3">
           <Button v-if="auth.user" size="lg" as="a" href="/plans">
-            进入我的计划书
+            开始分析
             <ArrowRightIcon data-icon="inline-end" />
           </Button>
           <Button v-else size="lg" as="a" href="/api/v1/auth/login">
-            使用 SSO 登录
+            登录后分析想法
             <ArrowRightIcon data-icon="inline-end" />
           </Button>
           <Button variant="outline" size="lg" as="a" href="#how-it-works">

@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { FileTextIcon } from '@lucide/vue'
+import { SparklesIcon } from '@lucide/vue'
 import SidebarLayout from './SidebarLayout.vue'
 import type { NavSection } from './nav'
 
 const sections: NavSection[] = [
   {
     title: '工作区',
-    items: [{ to: '/plans', label: '我的计划书', icon: FileTextIcon }],
+    items: [
+      { to: '/plans', label: '分析工作台', icon: SparklesIcon },
+    ],
   },
 ]
 </script>

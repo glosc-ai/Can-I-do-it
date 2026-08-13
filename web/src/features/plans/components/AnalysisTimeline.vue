@@ -47,21 +47,69 @@ const steps = computed<Step[]>(() => {
 </script>
 
 <template>
-  <ol class="flex flex-col gap-3" aria-label="分析进度">
-    <li v-for="step in steps" :key="step.label" class="flex items-center gap-3">
-      <Spinner v-if="step.state === 'active'" class="size-4" />
-      <CheckCircle2Icon v-else-if="step.state === 'done'" class="size-4 text-primary" />
-      <XCircleIcon v-else-if="step.state === 'failed'" class="size-4 text-destructive" />
-      <CircleIcon v-else class="size-4 text-muted-foreground/40" />
-      <span
-        class="text-sm"
-        :class="step.state === 'pending' ? 'text-muted-foreground/60' : step.state === 'failed' ? 'text-destructive' : ''"
-      >
-        {{ step.label }}
-      </span>
-      <span v-if="step.time" class="ml-auto text-xs text-muted-foreground">
-        {{ formatTime(step.time) }}
-      </span>
+  <ol class="relative flex flex-col gap-0" aria-label="分析进度">
+    <li
+      v-for="(step, index) in steps"
+      :key="step.label"
+      class="relative flex items-start gap-4 pb-5 last:pb-0"
+    >
+      <!-- 连接线（非最后一项） -->
+      <div
+        v-if="index < steps.length - 1"
+        class="absolute left-[13px] top-7 bottom-0 w-px"
+        :class="
+          step.state === 'done'
+            ? 'bg-primary/40'
+            : step.state === 'failed'
+              ? 'bg-destructive/30'
+              : 'bg-border'
+        "
+        aria-hidden="true"
+      />
+
+      <!-- 步骤图标 -->
+      <div class="relative z-10 mt-0.5 shrink-0">
+        <!-- 激活中：脉冲圆点 -->
+        <span v-if="step.state === 'active'" class="relative flex size-6 items-center justify-center">
+          <span class="absolute inline-flex size-full animate-ping rounded-full bg-primary opacity-30" />
+          <span class="relative flex size-6 items-center justify-center rounded-full bg-primary/10 ring-2 ring-primary/30">
+            <Spinner class="size-3 text-primary" />
+          </span>
+        </span>
+        <!-- 完成：scale-in 动画 -->
+        <span v-else-if="step.state === 'done'" class="flex size-6 items-center justify-center animate-scale-in">
+          <CheckCircle2Icon class="size-5 text-primary" />
+        </span>
+        <!-- 失败 -->
+        <span v-else-if="step.state === 'failed'" class="flex size-6 items-center justify-center animate-scale-in">
+          <XCircleIcon class="size-5 text-destructive" />
+        </span>
+        <!-- 待定 -->
+        <span v-else class="flex size-6 items-center justify-center">
+          <CircleIcon class="size-5 text-muted-foreground/30" />
+        </span>
+      </div>
+
+      <!-- 步骤文字 -->
+      <div class="flex min-w-0 flex-1 items-center justify-between gap-2 pt-0.5">
+        <span
+          class="text-sm leading-5 transition-colors duration-200"
+          :class="
+            step.state === 'pending'
+              ? 'text-muted-foreground/50'
+              : step.state === 'failed'
+                ? 'font-medium text-destructive'
+                : step.state === 'active'
+                  ? 'font-medium text-foreground'
+                  : 'text-foreground'
+          "
+        >
+          {{ step.label }}
+        </span>
+        <span v-if="step.time" class="shrink-0 text-xs text-muted-foreground/60">
+          {{ formatTime(step.time) }}
+        </span>
+      </div>
     </li>
   </ol>
 </template>

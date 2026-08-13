@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gloscai/template-go-vue3-docker/server/database"
 )
 
 type User struct {
@@ -314,19 +316,7 @@ func (s *Service) adminUserStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"data": map[string]string{"status": in.Status}})
 }
 func (s *Service) placeholder(q string) string {
-	if s.cfg.Driver == "postgres" {
-		n := 0
-		var b strings.Builder
-		for _, p := range strings.Split(q, "?") {
-			if n > 0 {
-				b.WriteString(fmt.Sprintf("$%d", n))
-			}
-			b.WriteString(p)
-			n++
-		}
-		return b.String()
-	}
-	return q
+	return database.Placeholder(s.cfg.Driver, q)
 }
 func random(n int) string {
 	b := make([]byte, n)

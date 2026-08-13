@@ -19,7 +19,19 @@ services:
   redis:
     image: redis:7.4-alpine
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    # SECURITY: Set REDIS_PASSWORD in your .env and pass it here via
+    # --requirepass so the instance is not open without authentication if
+    # the port is ever accidentally exposed.
+    command: >
+      sh -c '
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"
+        else
+          exec redis-server --appendonly yes
+        fi
+      '
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - redis_data:/data
     healthcheck:
@@ -44,7 +56,11 @@ services:
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       REDIS_DB: ${REDIS_DB:-0}
-      JWT_SECRET: ${JWT_SECRET:-replace-this-development-secret-before-production}
+      # SECURITY: Replace with a random secret before deploying.
+      # A default value is intentionally avoided here so that a missing
+      # JWT_SECRET causes startup to fail rather than silently using a
+      # well-known string in production.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required in production}
       JWT_ISSUER: ${JWT_ISSUER:-go-vue-starter}
       JWT_TTL: ${JWT_TTL:-24h}
       SSO_DISCOVERY_URL: ${SSO_DISCOVERY_URL:-https://sso.gloscai.com/api/.well-known/openid-configuration}
@@ -63,7 +79,7 @@ services:
       R2_PUBLIC_URL: ${R2_PUBLIC_URL:-}
       R2_REGION: ${R2_REGION:-auto}
       R2_FORCE_PATH_STYLE: ${R2_FORCE_PATH_STYLE:-false}
-      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?APP_ENCRYPTION_KEY must be exactly 32 characters in production}
       AI_ENDPOINT: ${AI_ENDPOINT:-}
       AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
       AI_API_KEY: ${AI_API_KEY:-}

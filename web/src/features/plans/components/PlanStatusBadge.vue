@@ -6,7 +6,10 @@ defineProps<{ status: string }>()
 </script>
 
 <template>
-  <Badge :variant="planStatusMeta(status).variant">
+  <Badge
+    :variant="planStatusMeta(status).variant"
+    :class="planStatusMeta(status).className"
+  >
     {{ planStatusMeta(status).label }}
   </Badge>
 </template>

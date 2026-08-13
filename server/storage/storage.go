@@ -5,11 +5,7 @@ package storage
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -18,12 +14,14 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/gloscai/template-go-vue3-docker/server/cryptoutil"
 )
 
 const (
@@ -35,6 +33,11 @@ const (
 	settingPublicURL       = "storage_public_url"
 	settingRegion          = "storage_region"
 	settingForcePathStyle  = "storage_force_path_style"
+
+	// configCacheTTL is how long the resolved R2Config is reused before the
+	// database is queried again. Keeps per-request overhead near zero while
+	// still picking up admin-panel changes within a few seconds.
+	configCacheTTL = 10 * time.Second
 )
 
 // R2Config is the provider configuration needed by the S3-compatible API.
@@ -73,6 +76,13 @@ type Service struct {
 	localDir   string
 	envR2      R2Config
 	max        int64
+
+	// configCache holds the last resolved R2Config and when it was loaded.
+	// The cache is invalidated after configCacheTTL so that changes made
+	// through the admin settings UI are picked up without a restart.
+	configCache    R2Config
+	configCachedAt time.Time
+	configMu       sync.Mutex
 }
 
 func New(db *sql.DB, driver, encryptionKey, localDir string, maxUploadBytes int64, defaults R2Config) *Service {
@@ -152,14 +162,14 @@ func (s *Service) SaveR2Settings(ctx context.Context, in Update) error {
 		values[settingSecretAccessKey] = ""
 	} else {
 		if in.AccessKeyID != "" {
-			v, err := encrypt(s.encryption, strings.TrimSpace(in.AccessKeyID))
+			v, err := cryptoutil.Encrypt(s.encryption, strings.TrimSpace(in.AccessKeyID))
 			if err != nil {
 				return err
 			}
 			values[settingAccessKeyID] = v
 		}
 		if in.SecretAccessKey != "" {
-			v, err := encrypt(s.encryption, strings.TrimSpace(in.SecretAccessKey))
+			v, err := cryptoutil.Encrypt(s.encryption, strings.TrimSpace(in.SecretAccessKey))
 			if err != nil {
 				return err
 			}
@@ -175,6 +185,11 @@ func (s *Service) SaveR2Settings(ctx context.Context, in Update) error {
 			return err
 		}
 	}
+	// Invalidate the config cache so the next storage operation picks up the
+	// new credentials without waiting for the TTL to expire.
+	s.configMu.Lock()
+	s.configCachedAt = time.Time{}
+	s.configMu.Unlock()
 	return nil
 }
 
@@ -341,6 +356,15 @@ func (s *Service) Test(ctx context.Context) error {
 }
 
 func (s *Service) r2Config(ctx context.Context) (R2Config, error) {
+	// Fast path: return the cached config if it is still fresh.
+	s.configMu.Lock()
+	if !s.configCachedAt.IsZero() && time.Since(s.configCachedAt) < configCacheTTL {
+		cfg := s.configCache
+		s.configMu.Unlock()
+		return cfg, nil
+	}
+	s.configMu.Unlock()
+
 	cfg := s.envR2
 	if cfg.Region == "" {
 		cfg.Region = "auto"
@@ -379,17 +403,23 @@ func (s *Service) r2Config(ctx context.Context) (R2Config, error) {
 			cfg.ForcePathStyle, _ = strconv.ParseBool(value)
 		case settingAccessKeyID:
 			if value != "" {
-				cfg.AccessKeyID, _ = decrypt(s.encryption, value)
+				cfg.AccessKeyID, _ = cryptoutil.Decrypt(s.encryption, value)
 			}
 		case settingSecretAccessKey:
 			if value != "" {
-				cfg.SecretAccessKey, _ = decrypt(s.encryption, value)
+				cfg.SecretAccessKey, _ = cryptoutil.Decrypt(s.encryption, value)
 			}
 		}
 	}
 	if cfg.Endpoint == "" && cfg.AccountID != "" {
 		cfg.Endpoint = "https://" + cfg.AccountID + ".r2.cloudflarestorage.com"
 	}
+
+	s.configMu.Lock()
+	s.configCache = cfg
+	s.configCachedAt = time.Now()
+	s.configMu.Unlock()
+
 	return cfg, nil
 }
 
@@ -468,39 +498,6 @@ func s3Client(ctx context.Context, cfg R2Config) (*s3.Client, error) {
 	return s3.NewFromConfig(loaded, func(options *s3.Options) {
 		options.UsePathStyle = cfg.ForcePathStyle
 	}), nil
-}
-
-func encrypt(key []byte, plain string) (string, error) {
-	cipherBlock, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(cipherBlock)
-	if err != nil {
-		return "", err
-	}
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
-	return base64.RawStdEncoding.EncodeToString(gcm.Seal(nonce, nonce, []byte(plain), nil)), nil
-}
-
-func decrypt(key []byte, encoded string) (string, error) {
-	cipherBlock, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(cipherBlock)
-	if err != nil {
-		return "", err
-	}
-	raw, err := base64.RawStdEncoding.DecodeString(encoded)
-	if err != nil || len(raw) < gcm.NonceSize() {
-		return "", fmt.Errorf("invalid encrypted value")
-	}
-	plain, err := gcm.Open(nil, raw[:gcm.NonceSize()], raw[gcm.NonceSize():], nil)
-	return string(plain), err
 }
 
 // HTTPErrorCode maps storage failures to stable API error codes without

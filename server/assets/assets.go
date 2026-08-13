@@ -1,7 +1,6 @@
 package assets
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -14,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gloscai/template-go-vue3-docker/server/database"
+	"github.com/gloscai/template-go-vue3-docker/server/httputil"
 	"github.com/gloscai/template-go-vue3-docker/server/storage"
 	"github.com/gloscai/template-go-vue3-docker/server/users"
 )
@@ -58,7 +59,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	source := r.URL.Query().Get("source")
 	if source != "" && !validSources[source] {
-		errJSON(w, 400, "invalid_source", "source must be upload, ai_generated, or fetched")
+		httputil.WriteError(w, 400, "invalid_source", "source must be upload, ai_generated, or fetched")
 		return
 	}
 	where := " WHERE user_id=?"
@@ -75,17 +76,17 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	r.Body = http.MaxBytesReader(w, r.Body, s.max+1024*1024)
 	if err := r.ParseMultipartForm(s.max); err != nil {
-		errJSON(w, 413, "file_too_large", "file is too large")
+		httputil.WriteError(w, 413, "file_too_large", "file is too large")
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		errJSON(w, 400, "file_required", "file is required")
+		httputil.WriteError(w, 400, "file_required", "file is required")
 		return
 	}
 	defer file.Close()
 	if header.Size > s.max {
-		errJSON(w, 413, "file_too_large", "file is too large")
+		httputil.WriteError(w, 413, "file_too_large", "file is too large")
 		return
 	}
 	source := strings.TrimSpace(r.FormValue("source"))
@@ -93,7 +94,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		source = "upload"
 	}
 	if !validSources[source] {
-		errJSON(w, 400, "invalid_source", "source must be upload, ai_generated, or fetched")
+		httputil.WriteError(w, 400, "invalid_source", "source must be upload, ai_generated, or fetched")
 		return
 	}
 	name := strings.TrimSpace(r.FormValue("name"))
@@ -102,21 +103,21 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	}
 	planID, err := optionalPlanID(r.FormValue("plan_id"))
 	if err != nil {
-		errJSON(w, 400, "invalid_plan_id", "plan_id must be a positive integer")
+		httputil.WriteError(w, 400, "invalid_plan_id", "plan_id must be a positive integer")
 		return
 	}
 	if planID != nil {
 		var ownerID int64
 		if err := s.db.QueryRowContext(r.Context(), s.q("SELECT user_id FROM business_plans WHERE id=?"), *planID).Scan(&ownerID); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				errJSON(w, 404, "not_found", "plan not found")
+				httputil.WriteError(w, 404, "not_found", "plan not found")
 			} else {
-				errJSON(w, 500, "internal_error", "could not load plan")
+				httputil.WriteError(w, 500, "internal_error", "could not load plan")
 			}
 			return
 		}
 		if ownerID != u.ID && u.Role != "owner" {
-			errJSON(w, 403, "forbidden", "not your plan")
+			httputil.WriteError(w, 403, "forbidden", "not your plan")
 			return
 		}
 	}
@@ -126,22 +127,22 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	}
 	var metadataObject map[string]any
 	if json.Unmarshal([]byte(metadata), &metadataObject) != nil || metadataObject == nil {
-		errJSON(w, 400, "invalid_metadata", "metadata must be a JSON object")
+		httputil.WriteError(w, 400, "invalid_metadata", "metadata must be a JSON object")
 		return
 	}
 	key := fmt.Sprintf("users/%d/%s/%d-%s", u.ID, source, time.Now().UnixNano(), safeFilename(header.Filename))
 	if err := s.store.Put(r.Context(), key, file, header.Size, header.Header.Get("Content-Type")); err != nil {
-		errJSON(w, 500, storage.HTTPErrorCode(err), "could not save asset")
+		httputil.WriteError(w, 500, storage.HTTPErrorCode(err), "could not save asset")
 		return
 	}
 	asset, err := s.insert(r.Context(), u.ID, planID, source, name, key, header.Header.Get("Content-Type"), header.Size, metadata)
 	if err != nil {
 		_ = s.store.Delete(context.Background(), key)
-		errJSON(w, 500, "internal_error", "could not record asset")
+		httputil.WriteError(w, 500, "internal_error", "could not record asset")
 		return
 	}
 	asset.DownloadURL = s.downloadURL(r, asset.ID, key)
-	jsonOut(w, 201, map[string]any{"data": asset})
+	httputil.WriteJSON(w, 201, map[string]any{"data": asset})
 }
 
 // Save is the server-side counterpart to the multipart endpoint. AI and
@@ -196,59 +197,60 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	id, err := positiveID(r.PathValue("id"))
 	if err != nil {
-		errJSON(w, 400, "invalid_id", "asset id must be a positive integer")
+		httputil.WriteError(w, 400, "invalid_id", "asset id must be a positive integer")
 		return
 	}
 	asset, key, err := s.load(r.Context(), id, u.ID, u.Role == "owner")
 	if errors.Is(err, sql.ErrNoRows) {
-		errJSON(w, 404, "not_found", "asset not found")
+		httputil.WriteError(w, 404, "not_found", "asset not found")
 		return
 	}
 	if err != nil {
-		errJSON(w, 500, "internal_error", "could not load asset")
+		httputil.WriteError(w, 500, "internal_error", "could not load asset")
 		return
 	}
 	asset.DownloadURL = s.downloadURL(r, id, key)
-	jsonOut(w, 200, map[string]any{"data": asset})
+	httputil.WriteJSON(w, 200, map[string]any{"data": asset})
 }
 
 func (s *Service) download(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	id, err := positiveID(r.PathValue("id"))
 	if err != nil {
-		errJSON(w, 400, "invalid_id", "asset id must be a positive integer")
+		httputil.WriteError(w, 400, "invalid_id", "asset id must be a positive integer")
 		return
 	}
 	asset, key, err := s.load(r.Context(), id, u.ID, u.Role == "owner")
 	if errors.Is(err, sql.ErrNoRows) {
-		errJSON(w, 404, "not_found", "asset not found")
+		httputil.WriteError(w, 404, "not_found", "asset not found")
 		return
 	}
 	if err != nil {
-		errJSON(w, 500, "internal_error", "could not load asset")
+		httputil.WriteError(w, 500, "internal_error", "could not load asset")
 		return
 	}
 	if target, err := s.store.URL(r.Context(), key, 15*time.Minute); err != nil {
-		errJSON(w, 500, storage.HTTPErrorCode(err), "could not create download URL")
+		httputil.WriteError(w, 500, storage.HTTPErrorCode(err), "could not create download URL")
 		return
 	} else if target != "" {
 		http.Redirect(w, r, target, http.StatusFound)
 		return
 	}
-	body, _, err := s.store.Open(r.Context(), key)
+	body, size, err := s.store.Open(r.Context(), key)
 	if err != nil {
-		errJSON(w, 404, "not_found", "asset content not found")
+		httputil.WriteError(w, 404, "not_found", "asset content not found")
 		return
 	}
 	defer body.Close()
 	w.Header().Set("Content-Type", asset.MimeType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", safeHeaderFilename(asset.Name)))
-	content, err := io.ReadAll(body)
-	if err != nil {
-		errJSON(w, 500, "storage_error", "could not read asset content")
-		return
+	if size > 0 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", size))
 	}
-	http.ServeContent(w, r, asset.Name, asset.CreatedAt, bytes.NewReader(content))
+	// Stream directly to the response writer instead of buffering the entire
+	// file in memory — large uploads previously caused unnecessary heap spikes.
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, body)
 }
 
 func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
@@ -259,7 +261,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 func (s *Service) adminDelete(w http.ResponseWriter, r *http.Request) {
 	u, ok := users.UserFromContext(r.Context())
 	if !ok || u.Role != "owner" {
-		errJSON(w, 403, "owner_required", "owner permission required")
+		httputil.WriteError(w, 403, "owner_required", "owner permission required")
 		return
 	}
 	s.remove(w, r, 0, true)
@@ -268,20 +270,20 @@ func (s *Service) adminDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Service) remove(w http.ResponseWriter, r *http.Request, userID int64, all bool) {
 	id, err := positiveID(r.PathValue("id"))
 	if err != nil {
-		errJSON(w, 400, "invalid_id", "asset id must be a positive integer")
+		httputil.WriteError(w, 400, "invalid_id", "asset id must be a positive integer")
 		return
 	}
 	asset, key, err := s.load(r.Context(), id, userID, all)
 	if errors.Is(err, sql.ErrNoRows) {
-		errJSON(w, 404, "not_found", "asset not found")
+		httputil.WriteError(w, 404, "not_found", "asset not found")
 		return
 	}
 	if err != nil {
-		errJSON(w, 500, "internal_error", "could not load asset")
+		httputil.WriteError(w, 500, "internal_error", "could not load asset")
 		return
 	}
 	if err := s.store.Delete(r.Context(), key); err != nil {
-		errJSON(w, 500, storage.HTTPErrorCode(err), "could not delete asset content")
+		httputil.WriteError(w, 500, storage.HTTPErrorCode(err), "could not delete asset content")
 		return
 	}
 	query := "DELETE FROM storage_assets WHERE id=?"
@@ -292,11 +294,11 @@ func (s *Service) remove(w http.ResponseWriter, r *http.Request, userID int64, a
 	}
 	result, err := s.db.ExecContext(r.Context(), s.q(query), args...)
 	if err != nil {
-		errJSON(w, 500, "internal_error", "could not delete asset")
+		httputil.WriteError(w, 500, "internal_error", "could not delete asset")
 		return
 	}
 	if n, _ := result.RowsAffected(); n == 0 {
-		errJSON(w, 404, "not_found", "asset not found")
+		httputil.WriteError(w, 404, "not_found", "asset not found")
 		return
 	}
 	_ = asset
@@ -306,7 +308,7 @@ func (s *Service) remove(w http.ResponseWriter, r *http.Request, userID int64, a
 func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	u, ok := users.UserFromContext(r.Context())
 	if !ok || u.Role != "owner" {
-		errJSON(w, 403, "owner_required", "owner permission required")
+		httputil.WriteError(w, 403, "owner_required", "owner permission required")
 		return
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -322,7 +324,7 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	}
 	source := r.URL.Query().Get("source")
 	if source != "" && !validSources[source] {
-		errJSON(w, 400, "invalid_source", "source must be upload, ai_generated, or fetched")
+		httputil.WriteError(w, 400, "invalid_source", "source must be upload, ai_generated, or fetched")
 		return
 	}
 	where := ""
@@ -333,7 +335,7 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	}
 	var total int
 	if err := s.db.QueryRowContext(r.Context(), s.q("SELECT COUNT(*) FROM storage_assets"+where), args...).Scan(&total); err != nil {
-		errJSON(w, 500, "internal_error", "could not count assets")
+		httputil.WriteError(w, 500, "internal_error", "could not count assets")
 		return
 	}
 	query := "SELECT id,user_id,plan_id,source,name,object_key,mime_type,size_bytes,metadata,created_at FROM storage_assets" + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?"
@@ -348,7 +350,7 @@ func (s *Service) writeList(w http.ResponseWriter, r *http.Request, query string
 func (s *Service) writeListWithMeta(w http.ResponseWriter, r *http.Request, query string, args []any, meta map[string]int) {
 	rows, err := s.db.QueryContext(r.Context(), s.q(query), args...)
 	if err != nil {
-		errJSON(w, 500, "internal_error", "could not list assets")
+		httputil.WriteError(w, 500, "internal_error", "could not list assets")
 		return
 	}
 	defer rows.Close()
@@ -365,7 +367,7 @@ func (s *Service) writeListWithMeta(w http.ResponseWriter, r *http.Request, quer
 	if meta != nil {
 		response["meta"] = meta
 	}
-	jsonOut(w, 200, response)
+	httputil.WriteJSON(w, 200, response)
 }
 
 func (s *Service) insert(ctx context.Context, userID int64, planID *int64, source, name, key, mimeType string, size int64, metadata string) (Asset, error) {
@@ -412,19 +414,7 @@ func (s *Service) downloadURL(r *http.Request, id int64, key string) string {
 }
 
 func (s *Service) q(query string) string {
-	if s.driver != "postgres" {
-		return query
-	}
-	var b strings.Builder
-	n := 0
-	for _, part := range strings.Split(query, "?") {
-		if n > 0 {
-			fmt.Fprintf(&b, "$%d", n)
-		}
-		b.WriteString(part)
-		n++
-	}
-	return b.String()
+	return database.Placeholder(s.driver, query)
 }
 
 type scanner interface{ Scan(...any) error }
@@ -493,14 +483,4 @@ func safeHeaderFilename(value string) string {
 	value = filepath.Base(value)
 	value = strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(value, "\"", "'"), "\\", "-"), "\r", "")
 	return strings.ReplaceAll(value, "\n", "")
-}
-
-func jsonOut(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func errJSON(w http.ResponseWriter, status int, code, message string) {
-	jsonOut(w, status, map[string]any{"error": map[string]string{"code": code, "message": message}})
 }

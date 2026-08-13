@@ -4,11 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/x509"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +17,8 @@ import (
 	"time"
 
 	"github.com/gloscai/template-go-vue3-docker/server/assets"
+	"github.com/gloscai/template-go-vue3-docker/server/cryptoutil"
+	"github.com/gloscai/template-go-vue3-docker/server/database"
 	"github.com/gloscai/template-go-vue3-docker/server/storage"
 )
 
@@ -71,9 +70,19 @@ func (w *Worker) process(ctx context.Context) {
 	// upload time. Keep the claim query free of outer joins: PostgreSQL rejects
 	// FOR UPDATE on the nullable side of a LEFT JOIN, which otherwise causes
 	// every queued job to be skipped silently.
+	//
+	// Both PostgreSQL and MySQL support FOR UPDATE SKIP LOCKED. Without the
+	// lock, multiple worker instances (e.g. rolling deploys) can claim the
+	// same job simultaneously and produce duplicate results.
 	query := "SELECT j.id,j.plan_id,p.user_id,p.filename,p.mime_type,p.object_key FROM analysis_jobs j JOIN business_plans p ON p.id=j.plan_id WHERE j.status='queued' ORDER BY j.id LIMIT 1"
 	if w.driver == "postgres" {
 		query += " FOR UPDATE OF j SKIP LOCKED"
+	} else {
+		// MySQL: FOR UPDATE SKIP LOCKED is supported since 8.0.
+		// SKIP LOCKED prevents two workers from blocking each other on the
+		// same row; without it the second worker would wait and then re-claim
+		// a job that the first has already transitioned to 'running'.
+		query += " FOR UPDATE SKIP LOCKED"
 	}
 	tx, err := w.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -147,27 +156,22 @@ func (w *Worker) process(ctx context.Context) {
 				failure, summary = providerHTTPFailure(resp)
 				jobStatus = "failed"
 			} else {
-				responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024+1))
-				if len(responseBody) > 2*1024*1024 {
+				content, contentErr := readProviderContent(resp)
+				switch {
+				case errors.Is(contentErr, errProviderContentTooLarge):
 					jobStatus, failure, summary = "failed", "AI 服务响应过大。", "AI 服务返回内容超过 2 MB 限制，请缩短输出或检查模型配置。"
-				} else if len(bytes.TrimSpace(responseBody)) == 0 {
-					jobStatus = "failed"
-					if readErr != nil {
-						failure, summary = "无法读取 AI 服务响应。", "AI 服务响应读取失败，请检查网关连接和上游服务日志。"
+				case errors.Is(contentErr, io.EOF):
+					jobStatus, failure, summary = "failed", "AI 服务返回了空响应，可能在生成结果时断开了连接。", "AI 服务没有返回可用内容，请检查网关超时和上游服务日志。"
+				case errors.Is(contentErr, errProviderContentUnreadable):
+					jobStatus, failure, summary = "failed", "无法读取 AI 服务响应。", "AI 服务响应读取失败，请检查网关连接和上游服务日志。"
+				case contentErr != nil:
+					jobStatus, failure, summary = "failed", "AI 服务返回格式不完整："+contentErr.Error(), "AI 服务响应格式异常，请检查模型网关的 OpenAI 兼容配置。"
+				default:
+					if normalized, normalizeErr := normalizeResult(content, plan, source); normalizeErr != nil {
+						jobStatus, failure, summary = "failed", "AI 返回内容无法转换为结构化评分："+normalizeErr.Error(), "AI 结果格式不符合分析要求，请重试或检查模型配置。"
 					} else {
-						failure, summary = "AI 服务返回了空响应，可能在生成结果时断开了连接。", "AI 服务没有返回可用内容，请检查网关超时和上游服务日志。"
+						result, summary = normalized, normalized.Summary
 					}
-				} else if content, err := providerResponseContent(responseBody); err != nil {
-					jobStatus = "failed"
-					if errors.Is(err, io.EOF) {
-						failure, summary = "AI 服务返回了空响应，可能在生成结果时断开了连接。", "AI 服务没有返回可用内容，请检查网关超时和上游服务日志。"
-					} else {
-						failure, summary = "AI 服务返回格式不完整："+err.Error(), "AI 服务响应格式异常，请检查模型网关的 OpenAI 兼容配置。"
-					}
-				} else if normalized, normalizeErr := normalizeResult(content, plan, source); normalizeErr != nil {
-					jobStatus, failure, summary = "failed", "AI 返回内容无法转换为结构化评分："+normalizeErr.Error(), "AI 结果格式不符合分析要求，请重试或检查模型配置。"
-				} else {
-					result, summary = normalized, normalized.Summary
 				}
 			}
 		}
@@ -244,6 +248,56 @@ func retryableProviderRequestError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
+// maxProviderContentBytes caps the assistant text, not the raw HTTP body.
+// With stream=true every token-sized delta is re-wrapped in its own SSE event
+// (`data: {"id":...,"model":...,"choices":[{"delta":{"content":"x"}}]}`), which
+// costs a few hundred bytes per token. Budgeting the raw bytes therefore
+// rejected perfectly normal nine-dimension results, because ~30 KB of JSON
+// expands into several MB on the wire.
+const maxProviderContentBytes = 2 * 1024 * 1024
+
+var (
+	errProviderContentTooLarge   = errors.New("provider content exceeds size limit")
+	errProviderContentUnreadable = errors.New("provider response could not be read")
+)
+
+// readProviderContent extracts the assistant text straight from the response
+// body. SSE events are decoded incrementally so the raw framing is never
+// buffered, and a regular JSON envelope still goes through the buffered path.
+func readProviderContent(resp *http.Response) (string, error) {
+	reader := bufio.NewReaderSize(resp.Body, 64*1024)
+	// Skip leading whitespace so a preceding newline does not hide the SSE
+	// prefix, and so an all-whitespace body is reported as empty.
+	for {
+		b, err := reader.Peek(1)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return "", io.EOF
+			}
+			return "", fmt.Errorf("%w: %v", errProviderContentUnreadable, err)
+		}
+		if b[0] == ' ' || b[0] == '\t' || b[0] == '\r' || b[0] == '\n' {
+			_, _ = reader.Discard(1)
+			continue
+		}
+		break
+	}
+	prefix, _ := reader.Peek(5)
+	jsonEnvelope := len(prefix) > 0 && (prefix[0] == '{' || prefix[0] == '[')
+	if bytes.HasPrefix(prefix, []byte("data:")) ||
+		(!jsonEnvelope && strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")) {
+		return providerStreamContent(reader)
+	}
+	raw, err := io.ReadAll(io.LimitReader(reader, maxProviderContentBytes+1))
+	if len(raw) > maxProviderContentBytes {
+		return "", errProviderContentTooLarge
+	}
+	if err != nil && len(bytes.TrimSpace(raw)) == 0 {
+		return "", fmt.Errorf("%w: %v", errProviderContentUnreadable, err)
+	}
+	return providerResponseContent(raw)
+}
+
 // providerResponseContent extracts the assistant text from an
 // OpenAI-compatible response. A few gateways return content as an array of
 // text parts, so accepting both forms avoids treating an otherwise valid
@@ -302,43 +356,52 @@ func providerResponseContent(raw []byte) (string, error) {
 // final regular JSON envelope even when stream=true, so that shape is handled
 // by providerResponseContent before this helper is called.
 func providerStreamContent(r io.Reader) (string, error) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 2*1024*1024)
-	var out strings.Builder
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" || payload == "[DONE]" {
-			continue
-		}
-		var envelope struct {
-			Choices []struct {
-				Delta struct {
-					Content json.RawMessage `json:"content"`
-				} `json:"delta"`
-				Message struct {
-					Content json.RawMessage `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
-			return "", fmt.Errorf("invalid streaming event: %w", err)
-		}
-		for _, choice := range envelope.Choices {
-			content := choice.Delta.Content
-			if len(content) == 0 {
-				content = choice.Message.Content
-			}
-			if text, ok := contentText(content); ok {
-				out.WriteString(text)
-			}
-		}
+	// bufio.Reader instead of bufio.Scanner: a gateway that batches several
+	// deltas into one event can emit a line longer than any fixed token
+	// budget, and Scanner would fail the whole job with "token too long".
+	reader, ok := r.(*bufio.Reader)
+	if !ok {
+		reader = bufio.NewReaderSize(r, 64*1024)
 	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("reading streaming response: %w", err)
+	var out strings.Builder
+	for {
+		line, readErr := reader.ReadString('\n')
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "data:") {
+			payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			if payload != "" && payload != "[DONE]" {
+				var envelope struct {
+					Choices []struct {
+						Delta struct {
+							Content json.RawMessage `json:"content"`
+						} `json:"delta"`
+						Message struct {
+							Content json.RawMessage `json:"content"`
+						} `json:"message"`
+					} `json:"choices"`
+				}
+				if err := json.Unmarshal([]byte(payload), &envelope); err != nil {
+					return "", fmt.Errorf("invalid streaming event: %w", err)
+				}
+				for _, choice := range envelope.Choices {
+					content := choice.Delta.Content
+					if len(content) == 0 {
+						content = choice.Message.Content
+					}
+					if text, ok := contentText(content); ok {
+						out.WriteString(text)
+						if out.Len() > maxProviderContentBytes {
+							return "", errProviderContentTooLarge
+						}
+					}
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("%w: %v", errProviderContentUnreadable, readErr)
+		}
 	}
 	if strings.TrimSpace(out.String()) == "" {
 		return "", fmt.Errorf("AI 服务流式响应没有内容")
@@ -479,45 +542,12 @@ func (w *Worker) aiSettings(ctx context.Context) (string, string, string) {
 		case "ai_model":
 			model = v
 		case "ai_api_key":
-			key, _ = decrypt(w.key, v)
+			key, _ = cryptoutil.Decrypt(w.key, v)
 		}
 	}
 	return endpoint, model, key
 }
 
-func decrypt(key []byte, encoded string) (string, error) {
-	b, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	g, err := cipher.NewGCM(b)
-	if err != nil {
-		return "", err
-	}
-	raw, err := base64.RawStdEncoding.DecodeString(encoded)
-	if err != nil {
-		return "", err
-	}
-	n := g.NonceSize()
-	if len(raw) < n {
-		return "", fmt.Errorf("invalid encrypted value")
-	}
-	plain, err := g.Open(nil, raw[:n], raw[n:], nil)
-	return string(plain), err
-}
-
 func (w *Worker) q(q string) string {
-	if w.driver != "postgres" {
-		return q
-	}
-	var b strings.Builder
-	n := 0
-	for _, part := range strings.Split(q, "?") {
-		if n > 0 {
-			fmt.Fprintf(&b, "$%d", n)
-		}
-		b.WriteString(part)
-		n++
-	}
-	return b.String()
+	return database.Placeholder(w.driver, q)
 }

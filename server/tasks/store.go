@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/gloscai/template-go-vue3-docker/server/database"
 )
 
 var ErrNotFound = errors.New("task not found")
@@ -18,12 +20,14 @@ func NewSQLStore(db *sql.DB, driver string) *SQLStore {
 	return &SQLStore{db: db, driver: driver}
 }
 
-func (s *SQLStore) List(ctx context.Context) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func (s *SQLStore) List(ctx context.Context, userID int64) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx,
+		database.Placeholder(s.driver, `
 		SELECT id, title, completed, created_at
 		FROM tasks
+		WHERE user_id = ?
 		ORDER BY created_at DESC, id DESC
-		LIMIT 100`)
+		LIMIT 100`), userID)
 	if err != nil {
 		return nil, fmt.Errorf("listing tasks: %w", err)
 	}
@@ -43,13 +47,13 @@ func (s *SQLStore) List(ctx context.Context) ([]Task, error) {
 	return items, nil
 }
 
-func (s *SQLStore) Create(ctx context.Context, title string) (Task, error) {
+func (s *SQLStore) Create(ctx context.Context, userID int64, title string) (Task, error) {
 	if s.driver == "postgres" {
 		var task Task
 		err := s.db.QueryRowContext(ctx, `
-			INSERT INTO tasks (title)
-			VALUES ($1)
-			RETURNING id, title, completed, created_at`, title).
+			INSERT INTO tasks (user_id, title)
+			VALUES ($1, $2)
+			RETURNING id, title, completed, created_at`, userID, title).
 			Scan(&task.ID, &task.Title, &task.Completed, &task.CreatedAt)
 		if err != nil {
 			return Task{}, fmt.Errorf("creating task: %w", err)
@@ -57,7 +61,7 @@ func (s *SQLStore) Create(ctx context.Context, title string) (Task, error) {
 		return task, nil
 	}
 
-	result, err := s.db.ExecContext(ctx, "INSERT INTO tasks (title) VALUES (?)", title)
+	result, err := s.db.ExecContext(ctx, "INSERT INTO tasks (user_id, title) VALUES (?, ?)", userID, title)
 	if err != nil {
 		return Task{}, fmt.Errorf("creating task: %w", err)
 	}
@@ -65,14 +69,13 @@ func (s *SQLStore) Create(ctx context.Context, title string) (Task, error) {
 	if err != nil {
 		return Task{}, fmt.Errorf("reading created task ID: %w", err)
 	}
-	return s.Lookup(ctx, id)
+	return s.lookup(ctx, id)
 }
 
-func (s *SQLStore) Lookup(ctx context.Context, id int64) (Task, error) {
-	query := "SELECT id, title, completed, created_at FROM tasks WHERE id = ?"
-	if s.driver == "postgres" {
-		query = "SELECT id, title, completed, created_at FROM tasks WHERE id = $1"
-	}
+// lookup fetches a task by ID without any user ownership check — it is only
+// called internally after a write that already validates ownership.
+func (s *SQLStore) lookup(ctx context.Context, id int64) (Task, error) {
+	query := database.Placeholder(s.driver, "SELECT id, title, completed, created_at FROM tasks WHERE id = ?")
 	var task Task
 	if err := s.db.QueryRowContext(ctx, query, id).Scan(&task.ID, &task.Title, &task.Completed, &task.CreatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -83,13 +86,9 @@ func (s *SQLStore) Lookup(ctx context.Context, id int64) (Task, error) {
 	return task, nil
 }
 
-func (s *SQLStore) SetCompleted(ctx context.Context, id int64, completed bool) (Task, error) {
-	query := "UPDATE tasks SET completed = ? WHERE id = ?"
-	args := []any{completed, id}
-	if s.driver == "postgres" {
-		query = "UPDATE tasks SET completed = $1 WHERE id = $2"
-	}
-	result, err := s.db.ExecContext(ctx, query, args...)
+func (s *SQLStore) SetCompleted(ctx context.Context, userID, id int64, completed bool) (Task, error) {
+	query := database.Placeholder(s.driver, "UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?")
+	result, err := s.db.ExecContext(ctx, query, completed, id, userID)
 	if err != nil {
 		return Task{}, fmt.Errorf("updating task %d: %w", id, err)
 	}
@@ -100,15 +99,12 @@ func (s *SQLStore) SetCompleted(ctx context.Context, id int64, completed bool) (
 	if updated == 0 {
 		return Task{}, ErrNotFound
 	}
-	return s.Lookup(ctx, id)
+	return s.lookup(ctx, id)
 }
 
-func (s *SQLStore) Delete(ctx context.Context, id int64) error {
-	query := "DELETE FROM tasks WHERE id = ?"
-	if s.driver == "postgres" {
-		query = "DELETE FROM tasks WHERE id = $1"
-	}
-	result, err := s.db.ExecContext(ctx, query, id)
+func (s *SQLStore) Delete(ctx context.Context, userID, id int64) error {
+	query := database.Placeholder(s.driver, "DELETE FROM tasks WHERE id = ? AND user_id = ?")
+	result, err := s.db.ExecContext(ctx, query, id, userID)
 	if err != nil {
 		return fmt.Errorf("deleting task %d: %w", id, err)
 	}

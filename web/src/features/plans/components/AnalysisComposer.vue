@@ -128,7 +128,7 @@ defineExpose({ focus })
           role="tab"
           :aria-selected="mode === 'idea'"
           class="flex h-11 items-center gap-2 rounded-full px-5 text-sm font-medium transition-all sm:px-7 sm:text-base"
-          :class="mode === 'idea' ? 'bg-foreground text-background shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+          :class="mode === 'idea' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
           @click="setMode('idea')"
         >
           <LightbulbIcon class="size-4" />
@@ -140,7 +140,7 @@ defineExpose({ focus })
           role="tab"
           :aria-selected="mode === 'plan'"
           class="flex h-11 items-center gap-2 rounded-full px-5 text-sm font-medium transition-all sm:px-7 sm:text-base"
-          :class="mode === 'plan' ? 'bg-foreground text-background shadow-sm' : 'text-muted-foreground hover:text-foreground'"
+          :class="mode === 'plan' ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'"
           @click="setMode('plan')"
         >
           <FileTextIcon class="size-4" />
@@ -150,8 +150,8 @@ defineExpose({ focus })
     </div>
 
     <form
-      class="overflow-hidden rounded-[2rem] border border-white/12 bg-[#181818] text-white shadow-2xl shadow-black/15 transition-colors"
-      :class="dragging ? 'border-white/40 bg-[#1d1d1d]' : ''"
+      class="overflow-hidden rounded-[2rem] border bg-card text-card-foreground shadow-sm transition-colors"
+      :class="dragging ? 'border-primary/40 bg-muted/40' : ''"
       @submit.prevent="submit"
       @dragenter.prevent="dragging = true"
       @dragover.prevent="dragging = true"
@@ -167,7 +167,7 @@ defineExpose({ focus })
           maxlength="4000"
           autofocus
           placeholder="描述你的想法：想解决什么问题、为谁解决、准备怎么做……"
-          class="min-h-36 w-full resize-none bg-transparent text-base leading-7 text-white outline-none placeholder:text-white/38 sm:text-lg"
+          class="min-h-36 w-full resize-none bg-transparent text-base leading-7 text-foreground outline-none placeholder:text-muted-foreground/60 sm:text-lg"
           @keydown.meta.enter.prevent="submit"
           @keydown.ctrl.enter.prevent="submit"
         />
@@ -175,26 +175,26 @@ defineExpose({ focus })
         <button
           v-else-if="!file"
           type="button"
-          class="flex min-h-36 w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-white/15 text-center text-white/55 transition-colors hover:border-white/30 hover:bg-white/3 hover:text-white/80"
+          class="flex min-h-36 w-full flex-col items-center justify-center gap-3 rounded-2xl border border-dashed text-center text-muted-foreground transition-colors hover:border-primary/30 hover:bg-muted/30 hover:text-foreground"
           @click="fileInputRef?.click()"
         >
-          <span class="flex size-11 items-center justify-center rounded-xl bg-white/8 text-white">
+          <span class="flex size-11 items-center justify-center rounded-xl bg-muted text-foreground">
             <PaperclipIcon class="size-5" />
           </span>
-          <span class="text-base text-white/80">拖入计划书，或点击选择文件</span>
+          <span class="text-base text-foreground/80">拖入计划书，或点击选择文件</span>
           <span class="px-4 text-xs">PDF、Word、TXT、Markdown 或图片，最大 20 MB</span>
         </button>
 
         <div v-else class="flex min-h-36 flex-col justify-center gap-4">
-          <div class="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-            <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-white/8">
+          <div class="flex items-center gap-3 rounded-2xl border bg-muted/40 p-4">
+            <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted">
               <FileTextIcon class="size-5" />
             </span>
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-medium">{{ file.name }}</p>
-              <p class="mt-1 text-xs text-white/45">{{ fileTypeLabel(file.name, file.type) }} · {{ formatSize(file.size) }}</p>
+              <p class="mt-1 text-xs text-muted-foreground">{{ fileTypeLabel(file.name, file.type) }} · {{ formatSize(file.size) }}</p>
             </div>
-            <button type="button" class="rounded-full p-2 text-white/45 transition-colors hover:bg-white/10 hover:text-white" aria-label="移除文件" @click="clearFile">
+            <button type="button" class="rounded-full p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground" aria-label="移除文件" @click="clearFile">
               <XIcon class="size-4" />
             </button>
           </div>
@@ -203,7 +203,7 @@ defineExpose({ focus })
             type="text"
             maxlength="160"
             placeholder="为这次分析添加标题"
-            class="w-full border-b border-white/10 bg-transparent px-1 py-3 text-base text-white outline-none transition-colors placeholder:text-white/35 focus:border-white/35"
+            class="w-full border-b bg-transparent px-1 py-3 text-base text-foreground outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-primary/40"
           >
         </div>
       </div>
@@ -216,24 +216,24 @@ defineExpose({ focus })
         @change="onFileChange"
       >
 
-      <p v-if="fileError" class="px-6 pb-2 text-sm text-red-400 sm:px-8" role="alert">{{ fileError }}</p>
+      <p v-if="fileError" class="px-6 pb-2 text-sm text-destructive sm:px-8" role="alert">{{ fileError }}</p>
 
-      <div class="flex items-center justify-between gap-3 px-5 pb-5 pt-3 sm:px-7 sm:pb-6">
-        <div class="flex min-w-0 items-center gap-1 text-white/70 sm:gap-2">
-          <button type="button" class="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-white/8 hover:text-white" aria-label="上传计划书" @click="attachFile">
+      <div class="flex items-center justify-between gap-3 border-t px-5 pb-5 pt-3 sm:px-7 sm:pb-6">
+        <div class="flex min-w-0 items-center gap-1 text-muted-foreground sm:gap-2">
+          <button type="button" class="flex size-9 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-muted hover:text-foreground" aria-label="上传计划书" @click="attachFile">
             <PaperclipIcon class="size-5" />
           </button>
-          <span class="hidden h-9 items-center gap-2 rounded-full px-3 text-sm text-white/60 sm:flex">
+          <span class="hidden h-9 items-center gap-2 rounded-full px-3 text-sm text-muted-foreground sm:flex">
             <BrainCircuitIcon class="size-4" />
             九维分析
           </span>
-          <span class="hidden h-4 w-px bg-white/10 sm:block" />
-          <span class="hidden text-xs text-white/40 md:inline">{{ mode === 'idea' ? `${idea.trim().length} / 4000` : '上传后自动开始分析' }}</span>
+          <span class="hidden h-4 w-px bg-border sm:block" />
+          <span class="hidden text-xs text-muted-foreground/70 md:inline">{{ mode === 'idea' ? `${idea.trim().length} / 4000` : '上传后自动开始分析' }}</span>
         </div>
 
         <button
           type="submit"
-          class="flex size-12 shrink-0 items-center justify-center rounded-full bg-white text-black transition-all hover:scale-105 disabled:cursor-not-allowed disabled:bg-white/8 disabled:text-white/25 disabled:hover:scale-100"
+          class="flex size-12 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground transition-all hover:scale-105 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:scale-100"
           :disabled="!canSubmit"
           :aria-label="submitting ? '正在提交' : '开始分析'"
         >

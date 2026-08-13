@@ -1,18 +1,15 @@
 package settings
 
 import (
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"github.com/gloscai/template-go-vue3-docker/server/cryptoutil"
+	"github.com/gloscai/template-go-vue3-docker/server/httputil"
 	"github.com/gloscai/template-go-vue3-docker/server/storage"
 	"github.com/gloscai/template-go-vue3-docker/server/users"
 )
@@ -58,7 +55,7 @@ func (s *Service) getStorage(w http.ResponseWriter, r *http.Request) {
 		err(w, 500, "internal_error", "could not load storage settings")
 		return
 	}
-	jsonOut(w, 200, map[string]any{"data": settings})
+	httputil.WriteJSON(w, 200, map[string]any{"data": settings})
 }
 
 func (s *Service) setStorage(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +117,7 @@ func (s *Service) setStorage(w http.ResponseWriter, r *http.Request) {
 		err(w, 500, "internal_error", "could not load storage settings")
 		return
 	}
-	jsonOut(w, 200, map[string]any{"data": updated})
+	httputil.WriteJSON(w, 200, map[string]any{"data": updated})
 }
 
 func isHTTPURL(value string) bool {
@@ -141,7 +138,7 @@ func (s *Service) testStorage(w http.ResponseWriter, r *http.Request) {
 		err(w, 502, storage.HTTPErrorCode(e), "could not connect to R2 bucket")
 		return
 	}
-	jsonOut(w, 200, map[string]any{"data": map[string]string{"status": "ok"}})
+	httputil.WriteJSON(w, 200, map[string]any{"data": map[string]string{"status": "ok"}})
 }
 func (s *Service) owner(r *http.Request) bool {
 	u, ok := users.UserFromContext(r.Context())
@@ -175,7 +172,7 @@ func (s *Service) getAI(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	jsonOut(w, 200, map[string]any{"data": map[string]any{"endpoint": endpoint, "model": model, "has_api_key": hasKey}})
+	httputil.WriteJSON(w, 200, map[string]any{"data": map[string]any{"endpoint": endpoint, "model": model, "has_api_key": hasKey}})
 }
 func (s *Service) setAI(w http.ResponseWriter, r *http.Request) {
 	if !s.owner(r) {
@@ -198,7 +195,7 @@ func (s *Service) setAI(w http.ResponseWriter, r *http.Request) {
 			err(w, 503, "encryption_not_configured", "APP_ENCRYPTION_KEY must be 32 bytes")
 			return
 		}
-		v, e := encrypt(s.key, in.APIKey)
+		v, e := cryptoutil.Encrypt(s.key, in.APIKey)
 		if e != nil {
 			err(w, 500, "internal_error", "could not encrypt setting")
 			return
@@ -215,28 +212,8 @@ func (s *Service) setAI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	jsonOut(w, 200, map[string]any{"data": map[string]string{"endpoint": in.Endpoint, "model": in.Model, "has_api_key": strconv.FormatBool(in.APIKey != "")}})
-}
-func encrypt(key []byte, plain string) (string, error) {
-	b, e := aes.NewCipher(key)
-	if e != nil {
-		return "", e
-	}
-	g, e := cipher.NewGCM(b)
-	if e != nil {
-		return "", e
-	}
-	n := make([]byte, g.NonceSize())
-	if _, e = io.ReadFull(rand.Reader, n); e != nil {
-		return "", e
-	}
-	return base64.RawStdEncoding.EncodeToString(g.Seal(n, n, []byte(plain), nil)), nil
-}
-func jsonOut(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	httputil.WriteJSON(w, 200, map[string]any{"data": map[string]string{"endpoint": in.Endpoint, "model": in.Model, "has_api_key": strconv.FormatBool(in.APIKey != "")}})
 }
 func err(w http.ResponseWriter, status int, code, msg string) {
-	jsonOut(w, status, map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	httputil.WriteError(w, status, code, msg)
 }

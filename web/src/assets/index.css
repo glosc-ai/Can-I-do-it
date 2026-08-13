@@ -47,75 +47,136 @@
     --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* ─────────────────────────────────────────────
+   亮色主题
+   背景：近白冷灰（极低 chroma 冷色调）
+   主色：violet（oklch 0.55 0.22 280）
+   ───────────────────────────────────────────── */
 :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
+    /* 背景系 */
+    --background: oklch(0.985 0.003 264);
+    --foreground: oklch(0.14 0.012 264);
+
+    /* 卡片 */
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.14 0.012 264);
+
+    /* Popover */
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.14 0.012 264);
+
+    /* Primary — violet */
+    --primary: oklch(0.52 0.22 280);
     --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+
+    /* Secondary */
+    --secondary: oklch(0.96 0.006 264);
+    --secondary-foreground: oklch(0.25 0.012 264);
+
+    /* Muted */
+    --muted: oklch(0.96 0.004 264);
+    --muted-foreground: oklch(0.50 0.012 264);
+
+    /* Accent — 轻 violet tint */
+    --accent: oklch(0.94 0.018 280);
+    --accent-foreground: oklch(0.52 0.22 280);
+
+    /* Destructive */
     --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
+
+    /* Border & Input */
+    --border: oklch(0.90 0.006 264);
+    --input: oklch(0.90 0.006 264);
+
+    /* Ring — violet */
+    --ring: oklch(0.52 0.22 280);
+
+    /* Charts */
+    --chart-1: oklch(0.52 0.22 280);
+    --chart-2: oklch(0.62 0.17 160);
+    --chart-3: oklch(0.68 0.18 50);
+    --chart-4: oklch(0.60 0.20 30);
+    --chart-5: oklch(0.56 0.20 320);
+
+    /* Radius */
     --radius: 0.625rem;
-    --sidebar: oklch(0.985 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
+
+    /* Sidebar */
+    --sidebar: oklch(0.975 0.004 264);
+    --sidebar-foreground: oklch(0.14 0.012 264);
+    --sidebar-primary: oklch(0.52 0.22 280);
     --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.922 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --sidebar-accent: oklch(0.94 0.018 280);
+    --sidebar-accent-foreground: oklch(0.52 0.22 280);
+    --sidebar-border: oklch(0.90 0.006 264);
+    --sidebar-ring: oklch(0.52 0.22 280);
 }
 
+/* ─────────────────────────────────────────────
+   暗色主题
+   背景：深冷灰（极低 chroma）
+   主色：亮 violet（oklch 0.68 0.18 280）
+   ───────────────────────────────────────────── */
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.708 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
+    /* 背景系 */
+    --background: oklch(0.135 0.010 264);
+    --foreground: oklch(0.97 0.004 264);
+
+    /* 卡片 */
+    --card: oklch(0.185 0.010 264);
+    --card-foreground: oklch(0.97 0.004 264);
+
+    /* Popover */
+    --popover: oklch(0.185 0.010 264);
+    --popover-foreground: oklch(0.97 0.004 264);
+
+    /* Primary — 亮 violet */
+    --primary: oklch(0.70 0.17 280);
+    --primary-foreground: oklch(0.12 0.012 264);
+
+    /* Secondary */
+    --secondary: oklch(0.24 0.012 264);
+    --secondary-foreground: oklch(0.90 0.006 264);
+
+    /* Muted */
+    --muted: oklch(0.22 0.010 264);
+    --muted-foreground: oklch(0.60 0.008 264);
+
+    /* Accent */
+    --accent: oklch(0.28 0.030 280);
+    --accent-foreground: oklch(0.70 0.17 280);
+
+    /* Destructive */
     --destructive: oklch(0.704 0.191 22.216);
+
+    /* Border & Input */
     --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.556 0 0);
-    --chart-1: oklch(0.87 0 0);
-    --chart-2: oklch(0.556 0 0);
-    --chart-3: oklch(0.439 0 0);
-    --chart-4: oklch(0.371 0 0);
-    --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --input: oklch(1 0 0 / 14%);
+
+    /* Ring — violet */
+    --ring: oklch(0.70 0.17 280);
+
+    /* Charts */
+    --chart-1: oklch(0.70 0.17 280);
+    --chart-2: oklch(0.65 0.16 160);
+    --chart-3: oklch(0.72 0.17 50);
+    --chart-4: oklch(0.65 0.18 30);
+    --chart-5: oklch(0.62 0.18 320);
+
+    /* Sidebar */
+    --sidebar: oklch(0.165 0.010 264);
+    --sidebar-foreground: oklch(0.97 0.004 264);
+    --sidebar-primary: oklch(0.70 0.17 280);
+    --sidebar-primary-foreground: oklch(0.12 0.012 264);
+    --sidebar-accent: oklch(0.28 0.030 280);
+    --sidebar-accent-foreground: oklch(0.70 0.17 280);
     --sidebar-border: oklch(1 0 0 / 10%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --sidebar-ring: oklch(0.70 0.17 280);
 }
 
+/* ─────────────────────────────────────────────
+   Base styles
+   ───────────────────────────────────────────── */
 @layer base {
   * {
     @apply border-border outline-ring/50;
@@ -123,6 +184,8 @@
   body {
     @apply bg-background text-foreground;
     @apply font-sans;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     }
   html {
     @apply scroll-smooth;
@@ -131,3 +194,131 @@
     @apply min-h-screen;
     }
 }
+
+/* ─────────────────────────────────────────────
+   全局动画 keyframes
+   ───────────────────────────────────────────── */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+@keyframes draw-ring {
+  from { stroke-dashoffset: var(--ring-circumference); }
+  to   { stroke-dashoffset: var(--ring-offset); }
+}
+
+@keyframes spin-once {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ─────────────────────────────────────────────
+   页面切换过渡（路由级）
+   ───────────────────────────────────────────── */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* ─────────────────────────────────────────────
+   工具类
+   ───────────────────────────────────────────── */
+.animate-fade-up {
+  animation: fade-up 0.4s ease both;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease both;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.2s ease both;
+}
+
+.animate-spin-once {
+  animation: spin-once 0.4s ease both;
+}
+
+/* shimmer badge */
+.shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--color-primary) 0%,
+    oklch(0.80 0.12 280) 40%,
+    var(--color-primary) 80%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: shimmer 3s linear infinite;
+}
+
+/* 渐变标题文字 */
+.gradient-heading {
+  background: linear-gradient(
+    135deg,
+    var(--foreground) 0%,
+    oklch(0.52 0.22 280) 60%,
+    oklch(0.62 0.18 300) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.dark .gradient-heading {
+  background: linear-gradient(
+    135deg,
+    oklch(0.97 0.004 264) 0%,
+    oklch(0.78 0.14 280) 60%,
+    oklch(0.80 0.12 300) 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* 动画延迟工具类 */
+.delay-100 { animation-delay: 100ms; }
+.delay-200 { animation-delay: 200ms; }
+.delay-300 { animation-delay: 300ms; }
+.delay-400 { animation-delay: 400ms; }
+.delay-500 { animation-delay: 500ms; }
+.delay-600 { animation-delay: 600ms; }

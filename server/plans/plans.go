@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gloscai/template-go-vue3-docker/server/assets"
+	"github.com/gloscai/template-go-vue3-docker/server/database"
+	"github.com/gloscai/template-go-vue3-docker/server/httputil"
 	"github.com/gloscai/template-go-vue3-docker/server/storage"
 	"github.com/gloscai/template-go-vue3-docker/server/users"
 )
@@ -100,7 +102,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	rows, e := s.db.QueryContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans WHERE user_id=? ORDER BY created_at DESC"), u.ID)
 	if e != nil {
-		errJSON(w, 500, "internal_error", "could not list plans")
+		httputil.WriteError(w, 500, "internal_error", "could not list plans")
 		return
 	}
 	defer rows.Close()
@@ -108,11 +110,11 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Plan
 		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
-			s.enrichAsset(r.Context(), &p)
 			items = append(items, p)
 		}
 	}
-	jsonOut(w, 200, map[string]any{"data": items})
+	s.enrichAssets(r.Context(), items)
+	httputil.WriteJSON(w, 200, map[string]any{"data": items})
 }
 func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
@@ -120,12 +122,12 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	// the reported file header size, before ParseMultipartForm buffers it.
 	r.Body = http.MaxBytesReader(w, r.Body, s.max+1024*1024)
 	if err := r.ParseMultipartForm(s.max); err != nil {
-		errJSON(w, 413, "file_too_large", "file is too large")
+		httputil.WriteError(w, 413, "file_too_large", "file is too large")
 		return
 	}
 	file, header, e := r.FormFile("file")
 	if e != nil {
-		errJSON(w, 400, "file_required", "file is required")
+		httputil.WriteError(w, 400, "file_required", "file is required")
 		return
 	}
 	defer file.Close()
@@ -134,16 +136,16 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		title = header.Filename
 	}
 	if header.Size > s.max {
-		errJSON(w, 413, "file_too_large", "file is too large")
+		httputil.WriteError(w, 413, "file_too_large", "file is too large")
 		return
 	}
 	if !supportedPlanFile(header.Filename, header.Header.Get("Content-Type")) {
-		errJSON(w, 400, "unsupported_file_type", "supported formats are PDF, DOC, DOCX, TXT, Markdown, PNG, JPG, and WEBP")
+		httputil.WriteError(w, 400, "unsupported_file_type", "supported formats are PDF, DOC, DOCX, TXT, Markdown, PNG, JPG, and WEBP")
 		return
 	}
 	key := fmt.Sprintf("users/%d/upload/%d-%s", u.ID, time.Now().UnixNano(), safeFilename(header.Filename))
 	if e = s.store.Put(r.Context(), key, file, header.Size, header.Header.Get("Content-Type")); e != nil {
-		errJSON(w, 500, storage.HTTPErrorCode(e), "could not save file")
+		httputil.WriteError(w, 500, storage.HTTPErrorCode(e), "could not save file")
 		return
 	}
 	var p Plan
@@ -166,7 +168,7 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	}
 	if e != nil {
 		_ = s.store.Delete(context.Background(), key)
-		errJSON(w, 500, "internal_error", "could not create plan")
+		httputil.WriteError(w, 500, "internal_error", "could not create plan")
 		return
 	}
 	if s.assetRecord != nil {
@@ -175,13 +177,13 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 		if recorded, e = s.assetRecord.RecordExisting(r.Context(), u.ID, &planID, "upload", p.Filename, key, p.MimeType, p.Size, "{}"); e != nil {
 			_, _ = s.db.ExecContext(r.Context(), s.q("DELETE FROM business_plans WHERE id=?"), p.ID)
 			_ = s.store.Delete(context.Background(), key)
-			errJSON(w, 500, "internal_error", "could not record uploaded asset")
+			httputil.WriteError(w, 500, "internal_error", "could not record uploaded asset")
 			return
 		}
 		p.AssetID = &recorded.ID
 		p.DownloadURL = fmt.Sprintf("/api/v1/assets/%d/download", recorded.ID)
 	}
-	jsonOut(w, 201, map[string]any{"data": p})
+	httputil.WriteJSON(w, 201, map[string]any{"data": p})
 }
 
 func safeFilename(filename string) string {
@@ -213,109 +215,119 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	var p Plan
 	e := s.db.QueryRowContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans WHERE id=? AND user_id=?"), id, u.ID).Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt)
 	if e == sql.ErrNoRows {
-		errJSON(w, 404, "not_found", "plan not found")
+		httputil.WriteError(w, 404, "not_found", "plan not found")
 		return
 	}
 	if e != nil {
-		errJSON(w, 500, "internal_error", "could not load plan")
+		httputil.WriteError(w, 500, "internal_error", "could not load plan")
 		return
 	}
-	s.enrichAsset(r.Context(), &p)
-	jsonOut(w, 200, map[string]any{"data": p})
+	plans := []Plan{p}
+	s.enrichAssets(r.Context(), plans)
+	httputil.WriteJSON(w, 200, map[string]any{"data": plans[0]})
 }
 func (s *Service) analyze(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
-	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	var owner int64
-	if e := s.db.QueryRowContext(r.Context(), s.q("SELECT user_id FROM business_plans WHERE id=?"), id).Scan(&owner); e == sql.ErrNoRows {
-		errJSON(w, 404, "not_found", "plan not found")
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteError(w, 400, "invalid_id", "plan id must be a positive integer")
 		return
-	} else if e != nil || owner != u.ID {
-		errJSON(w, 403, "forbidden", "not your plan")
+	}
+	var owner int64
+	switch e := s.db.QueryRowContext(r.Context(), s.q("SELECT user_id FROM business_plans WHERE id=?"), id).Scan(&owner); {
+	case e == sql.ErrNoRows:
+		httputil.WriteError(w, 404, "not_found", "plan not found")
+		return
+	case e != nil:
+		// A real database error — do not pretend it is an authorisation failure.
+		httputil.WriteError(w, 500, "internal_error", "could not load plan")
+		return
+	case owner != u.ID:
+		httputil.WriteError(w, 403, "forbidden", "not your plan")
 		return
 	}
 	var jobID int64
 	if s.driver == "postgres" {
 		e := s.db.QueryRowContext(r.Context(), "INSERT INTO analysis_jobs (plan_id) VALUES ($1) RETURNING id", id).Scan(&jobID)
 		if e != nil {
-			errJSON(w, 500, "internal_error", "could not queue analysis")
+			httputil.WriteError(w, 500, "internal_error", "could not queue analysis")
 			return
 		}
 	} else {
 		res, e := s.db.ExecContext(r.Context(), "INSERT INTO analysis_jobs (plan_id) VALUES (?)", id)
 		if e != nil {
-			errJSON(w, 500, "internal_error", "could not queue analysis")
+			httputil.WriteError(w, 500, "internal_error", "could not queue analysis")
 			return
 		}
 		jobID, _ = res.LastInsertId()
 	}
 	_, _ = s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), "queued", id)
-	jsonOut(w, 202, map[string]any{"data": map[string]any{"id": jobID, "status": "queued"}})
+	httputil.WriteJSON(w, 202, map[string]any{"data": map[string]any{"id": jobID, "status": "queued"}})
 }
 
 func (s *Service) analysis(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
-		errJSON(w, 400, "invalid_id", "plan id must be a positive integer")
+		httputil.WriteError(w, 400, "invalid_id", "plan id must be a positive integer")
 		return
 	}
 	var ownerID int64
 	if err := s.db.QueryRowContext(r.Context(), s.q("SELECT user_id FROM business_plans WHERE id=? AND user_id=?"), id, u.ID).Scan(&ownerID); err != nil {
 		if err == sql.ErrNoRows {
-			errJSON(w, 404, "not_found", "plan not found")
+			httputil.WriteError(w, 404, "not_found", "plan not found")
 		} else {
-			errJSON(w, 500, "internal_error", "could not load plan")
+			httputil.WriteError(w, 500, "internal_error", "could not load plan")
 		}
 		return
 	}
 	job, err := s.latestAnalysis(r.Context(), id)
 	if err == sql.ErrNoRows {
-		jsonOut(w, 200, map[string]any{"data": nil})
+		httputil.WriteJSON(w, 200, map[string]any{"data": nil})
 		return
 	}
 	if err != nil {
-		errJSON(w, 500, "internal_error", "could not load analysis")
+		httputil.WriteError(w, 500, "internal_error", "could not load analysis")
 		return
 	}
-	jsonOut(w, 200, map[string]any{"data": job})
+	httputil.WriteJSON(w, 200, map[string]any{"data": job})
 }
 
 func (s *Service) retryAnalysis(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id <= 0 {
-		errJSON(w, 400, "invalid_id", "plan id must be a positive integer")
+		httputil.WriteError(w, 400, "invalid_id", "plan id must be a positive integer")
 		return
 	}
 	var ownerID int64
 	if err := s.db.QueryRowContext(r.Context(), s.q("SELECT user_id FROM business_plans WHERE id=?"), id).Scan(&ownerID); err != nil {
 		if err == sql.ErrNoRows {
-			errJSON(w, 404, "not_found", "plan not found")
+			httputil.WriteError(w, 404, "not_found", "plan not found")
 		} else {
-			errJSON(w, 500, "internal_error", "could not load plan")
+			httputil.WriteError(w, 500, "internal_error", "could not load plan")
 		}
 		return
 	}
 	if ownerID != u.ID && u.Role != "owner" {
-		errJSON(w, 403, "forbidden", "not your plan")
+		httputil.WriteError(w, 403, "forbidden", "not your plan")
 		return
 	}
 	var jobID int64
 	if err := s.db.QueryRowContext(r.Context(), s.q("SELECT id FROM analysis_jobs WHERE plan_id=? AND status='failed' ORDER BY id DESC LIMIT 1"), id).Scan(&jobID); err != nil {
 		if err == sql.ErrNoRows {
-			errJSON(w, 409, "not_retryable", "plan has no failed analysis")
+			httputil.WriteError(w, 409, "not_retryable", "plan has no failed analysis")
 		} else {
-			errJSON(w, 500, "internal_error", "could not find failed analysis")
+			httputil.WriteError(w, 500, "internal_error", "could not find failed analysis")
 		}
 		return
 	}
 	if _, err := s.db.ExecContext(r.Context(), s.q("UPDATE analysis_jobs SET status=?,error='',summary='',result=NULL,overall_score=NULL,verdict='',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='failed'"), "queued", jobID); err != nil {
-		errJSON(w, 500, "internal_error", "could not retry analysis")
+		httputil.WriteError(w, 500, "internal_error", "could not retry analysis")
 		return
 	}
 	_, _ = s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), "queued", id)
-	jsonOut(w, 202, map[string]any{"data": map[string]any{"id": jobID, "status": "queued"}})
+	httputil.WriteJSON(w, 202, map[string]any{"data": map[string]any{"id": jobID, "status": "queued"}})
 }
 
 func (s *Service) latestAnalysis(ctx context.Context, planID int64) (Analysis, error) {
@@ -369,7 +381,7 @@ func (s *Service) latestAnalysis(ctx context.Context, planID int64) (Analysis, e
 func (s *Service) adminAnalysis(w http.ResponseWriter, r *http.Request) {
 	u, ok := users.UserFromContext(r.Context())
 	if !ok || u.Role != "owner" {
-		errJSON(w, 403, "owner_required", "owner permission required")
+		httputil.WriteError(w, 403, "owner_required", "owner permission required")
 		return
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -388,7 +400,7 @@ func (s *Service) adminAnalysis(w http.ResponseWriter, r *http.Request) {
 	args := []any{}
 	if status != "" {
 		if status != "queued" && status != "running" && status != "succeeded" && status != "failed" {
-			errJSON(w, 400, "invalid_status", "status must be queued, running, succeeded, or failed")
+			httputil.WriteError(w, 400, "invalid_status", "status must be queued, running, succeeded, or failed")
 			return
 		}
 		where = " WHERE j.status=?"
@@ -397,14 +409,14 @@ func (s *Service) adminAnalysis(w http.ResponseWriter, r *http.Request) {
 	countQuery := "SELECT COUNT(*) FROM analysis_jobs j" + where
 	var total int
 	if err := s.db.QueryRowContext(r.Context(), s.q(countQuery), args...).Scan(&total); err != nil {
-		errJSON(w, 500, "internal_error", "could not count analyses")
+		httputil.WriteError(w, 500, "internal_error", "could not count analyses")
 		return
 	}
 	query := "SELECT j.id,j.plan_id,j.status,j.error,j.summary,j.result,j.overall_score,j.verdict,j.created_at,j.updated_at,p.user_id,p.title FROM analysis_jobs j JOIN business_plans p ON p.id=j.plan_id" + where + " ORDER BY j.updated_at DESC LIMIT ? OFFSET ?"
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(r.Context(), s.q(query), args...)
 	if err != nil {
-		errJSON(w, 500, "internal_error", "could not list analyses")
+		httputil.WriteError(w, 500, "internal_error", "could not list analyses")
 		return
 	}
 	defer rows.Close()
@@ -435,17 +447,17 @@ func (s *Service) adminAnalysis(w http.ResponseWriter, r *http.Request) {
 			items = append(items, a)
 		}
 	}
-	jsonOut(w, 200, map[string]any{"data": items, "meta": map[string]int{"page": page, "page_size": pageSize, "total": total}})
+	httputil.WriteJSON(w, 200, map[string]any{"data": items, "meta": map[string]int{"page": page, "page_size": pageSize, "total": total}})
 }
 func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	u, ok := users.UserFromContext(r.Context())
 	if !ok || u.Role != "owner" {
-		errJSON(w, 403, "owner_required", "owner permission required")
+		httputil.WriteError(w, 403, "owner_required", "owner permission required")
 		return
 	}
 	rows, e := s.db.QueryContext(r.Context(), "SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans ORDER BY created_at DESC LIMIT 200")
 	if e != nil {
-		errJSON(w, 500, "internal_error", "could not list plans")
+		httputil.WriteError(w, 500, "internal_error", "could not list plans")
 		return
 	}
 	defer rows.Close()
@@ -453,50 +465,76 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var p Plan
 		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
-			s.enrichAsset(r.Context(), &p)
 			items = append(items, p)
 		}
 	}
-	jsonOut(w, 200, map[string]any{"data": items})
+	s.enrichAssets(r.Context(), items)
+	httputil.WriteJSON(w, 200, map[string]any{"data": items})
 }
 
-func (s *Service) enrichAsset(ctx context.Context, p *Plan) {
-	if p == nil {
+// enrichAssets loads the latest storage asset for every plan in the slice in
+// a single query instead of one query per plan (N+1). It mutates the slice
+// elements in-place via a pointer map keyed by plan ID.
+func (s *Service) enrichAssets(ctx context.Context, plans []Plan) {
+	if len(plans) == 0 {
 		return
 	}
-	var id int64
-	var key string
-	if err := s.db.QueryRowContext(ctx, s.q("SELECT id,object_key FROM storage_assets WHERE plan_id=? ORDER BY id DESC LIMIT 1"), p.ID).Scan(&id, &key); err != nil {
+
+	// Build the IN clause and collect a pointer map so we can write back.
+	ids := make([]int64, len(plans))
+	byID := make(map[int64]*Plan, len(plans))
+	for i := range plans {
+		ids[i] = plans[i].ID
+		byID[plans[i].ID] = &plans[i]
+	}
+
+	// Build a driver-appropriate IN (?,?,…) query. We use a manual approach
+	// here because database.Placeholder only rewrites ? → $N positionally,
+	// which is exactly what we need.
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(
+		"SELECT DISTINCT ON (plan_id) id, plan_id, object_key FROM storage_assets WHERE plan_id IN (%s) ORDER BY plan_id, id DESC",
+		strings.Join(placeholders, ","),
+	)
+	if s.driver != "postgres" {
+		// MySQL does not support DISTINCT ON; use a subquery instead.
+		query = fmt.Sprintf(
+			"SELECT sa.id, sa.plan_id, sa.object_key FROM storage_assets sa INNER JOIN (SELECT plan_id, MAX(id) AS max_id FROM storage_assets WHERE plan_id IN (%s) GROUP BY plan_id) latest ON sa.id = latest.max_id",
+			strings.Join(placeholders, ","),
+		)
+	}
+
+	rows, err := s.db.QueryContext(ctx, database.Placeholder(s.driver, query), args...)
+	if err != nil {
+		// Non-fatal: plans just won't have download URLs.
 		return
 	}
-	p.AssetID = &id
-	p.DownloadURL = fmt.Sprintf("/api/v1/assets/%d/download", id)
-	if s.store != nil {
-		if url, err := s.store.URL(ctx, key, 15*time.Minute); err == nil && url != "" {
-			p.DownloadURL = url
+	defer rows.Close()
+
+	for rows.Next() {
+		var assetID, planID int64
+		var key string
+		if rows.Scan(&assetID, &planID, &key) != nil {
+			continue
+		}
+		p, ok := byID[planID]
+		if !ok {
+			continue
+		}
+		p.AssetID = &assetID
+		p.DownloadURL = fmt.Sprintf("/api/v1/assets/%d/download", assetID)
+		if s.store != nil {
+			if url, err := s.store.URL(ctx, key, 15*time.Minute); err == nil && url != "" {
+				p.DownloadURL = url
+			}
 		}
 	}
 }
 func (s *Service) q(q string) string {
-	if s.driver != "postgres" {
-		return q
-	}
-	var b strings.Builder
-	n := 0
-	for _, p := range strings.Split(q, "?") {
-		if n > 0 {
-			fmt.Fprintf(&b, "$%d", n)
-		}
-		b.WriteString(p)
-		n++
-	}
-	return b.String()
-}
-func jsonOut(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
-}
-func errJSON(w http.ResponseWriter, status int, code, msg string) {
-	jsonOut(w, status, map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	return database.Placeholder(s.driver, q)
 }

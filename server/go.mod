@@ -1,6 +1,6 @@
 module github.com/gloscai/template-go-vue3-docker/server
 
-go 1.25.0
+go 1.24.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.43.4

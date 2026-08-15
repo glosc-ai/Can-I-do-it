@@ -44,7 +44,7 @@ cd web && npx shadcn-vue@latest add <name>
 ## Frontend architecture (web/)
 
 - Vue 3 + TypeScript + Vite, Pinia, Vue Router, shadcn-vue (`nova` style, reka-ui) + Tailwind CSS v4.
-- **Relative URLs everywhere**: the browser never sees a backend host. Vite dev proxies `/api` and `/health` to `VITE_API_PROXY_TARGET` (default `http://localhost:8080`); Nginx does the same in production.
+- **Relative URLs everywhere**: the browser never sees a backend host. Vite dev proxies `/api` and `/health` to `VITE_API_PROXY_TARGET` (default `http://localhost:8080`); in production the Go binary embeds the built SPA (`server/webui`) and serves it itself, with an `index.html` fallback for Vue Router history mode — no separate web server.
 - Session is the HttpOnly cookie, so API calls use `fetch(..., { credentials: 'include' })` — see `src/api/client.ts`.
 - Layering: `src/api/` typed HTTP clients → `src/features/<domain>/` Pinia store + domain components → `src/views/` page composition only (no direct fetching in views). `src/components/ui/` is shadcn-vue CLI-managed source — use the CLI to add/upgrade, don't hand-write new primitives there.
 - Router guards (`src/router/index.ts`): `meta.requiresAuth` redirects unauthenticated users to `/api/v1/auth/login` (full-page SSO redirect); `meta.requiresOwner` checks `auth.user?.role`.

@@ -20,6 +20,7 @@ import (
 	"github.com/gloscai/template-go-vue3-docker/server/storage"
 	"github.com/gloscai/template-go-vue3-docker/server/tasks"
 	"github.com/gloscai/template-go-vue3-docker/server/users"
+	"github.com/gloscai/template-go-vue3-docker/server/webui"
 )
 
 func run(ctx context.Context) error {
@@ -68,6 +69,7 @@ func run(ctx context.Context) error {
 	assetService.Register(mux)
 	settings.New(db, cfg.Database.Driver, cfg.EncryptionKey, objectStore).Register(mux)
 	go analysis.NewWorkerWithStorage(db, cfg.Database.Driver, cfg.EncryptionKey, objectStore, cfg.Storage.MaxUploadBytes, assetService).Run(ctx)
+	mux.Handle("/", webui.Handler())
 
 	handler := withRecovery(logger,
 		withSecurityHeaders(

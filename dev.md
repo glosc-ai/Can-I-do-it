@@ -52,7 +52,7 @@ cp .env.example .env
 make up
 ```
 
-访问 <http://localhost:3000>。生产 Web 容器由 Nginx 提供静态资源，并将 `/api` 与 `/health` 反向代理到 Go API。
+访问 <http://localhost:8080>。生产镜像只有一个容器：Go 二进制内嵌了 Vue 构建产物（`server/webui`），同时提供 API 和前端静态资源。
 
 停止容器：
 
@@ -77,7 +77,8 @@ make down
 │   │       └── mysql/
 │   ├── health/                 # live / ready 探针
 │   ├── tasks/                  # 示例业务：模型、存储、HTTP、测试
-│   └── Dockerfile
+│   ├── webui/                  # 生产环境内嵌前端静态资源（go:embed）
+│   └── Dockerfile              # 仅供开发容器使用（go run .）
 ├── web/
 │   ├── src/
 │   │   ├── api/                # 类型化 HTTP 客户端
@@ -86,11 +87,11 @@ make down
 │   │   ├── router/             # Vue Router
 │   │   └── views/              # 页面入口
 │   ├── components.json         # shadcn-vue 项目配置
-│   ├── nginx.conf
-│   └── Dockerfile
+│   └── Dockerfile              # 仅供开发容器使用（Vite HMR）
 ├── docs/architecture.md
-├── docker-compose.yml          # 生产形态
-├── docker-compose.dev.yml      # 开发形态
+├── Dockerfile                  # 生产镜像：构建前端 + 内嵌到 Go 二进制
+├── docker-compose.yml          # 生产形态（单容器）
+├── docker-compose.dev.yml      # 开发形态（Go + Vite 两容器）
 ├── .github/workflows/
 │   ├── ci.yml
 │   └── release.yml
@@ -154,8 +155,7 @@ npx shadcn-vue@latest add dialog
 在 GitHub 创建 Release 后，`release.yml` 会构建 `linux/amd64` 与 `linux/arm64` 镜像并发布：
 
 ```text
-ghcr.io/<owner>/<repo>-api:<version>
-ghcr.io/<owner>/<repo>-web:<version>
+ghcr.io/<owner>/<repo>:<version>
 ```
 
 仓库的 Actions 需要保持 `packages: write` 权限。发布到 GHCR 与部署到具体服务器是两个独立步骤；服务器部署可在此工作流后追加 SSH、Kubernetes、Nomad 或云平台步骤。

@@ -6,17 +6,18 @@
 Browser
   └─ Vue view / Pinia feature
        └─ typed API client
-            └─ Nginx or Vite proxy
+            └─ Vite proxy (dev) or Go static handler (prod)
                  └─ Go middleware
                       └─ domain handlers + SQL stores
                            └─ PostgreSQL / MySQL
 
 Go API ── health readiness ── Redis
+       └─ webui ── embedded SPA (dist) with index.html fallback
        └─ storage/assets ── Cloudflare R2 (or local fallback)
        └─ analysis worker ── document/image extraction ── OpenAI-compatible vision/text model
 ```
 
-开发环境中，Vite 把 `/api` 和 `/health` 转发到 `api:8080`。生产环境由 Nginx 完成相同工作，因此浏览器始终使用相对 URL，不需要在公开镜像中写入后端主机名。
+开发环境中，Vite 把 `/api` 和 `/health` 转发到 `api:8080`，前端保留独立容器以获得热更新。生产环境只有一个 Go 进程：`server/webui` 用 `go:embed` 把 `web/dist` 打进二进制，同一个 `http.ServeMux` 既处理 `/api/v1/**`、`/health/**`，也直接提供静态资源并为未匹配到的路径回退到 `index.html`。浏览器始终使用相对 URL，不需要在公开镜像中写入后端主机名。
 
 ## 后端边界
 
@@ -26,6 +27,7 @@ Go API ── health readiness ── Redis
 - `auth` 提供 JWT 基础能力；接入用户业务时，由消费令牌的业务包定义它需要的最小接口。
 - `cache` 和 `health` 保持小而直接，避免无明确归属的 `utils`、`common` 包。
 - `storage` 是对象存储边界：R2 使用 AWS S3 SDK，未启用时回退到 `UPLOAD_DIR`；`assets` 保存对象元数据、来源和权限关系。Owner 可通过 `/admin/settings/storage` 动态更新 R2 配置，凭据以 AES-GCM 写入 `app_settings`。
+- `webui` 只负责生产环境的静态资源服务：`go:embed` 打包 `web/dist`，未匹配到文件时回退 `index.html`；仓库里的 `dist/index.html` 只是占位文件，真实内容在 Docker 构建时被覆盖。
 - `analysis` 内置 `feasibility_skill.md`，Worker 在调用 AI 前会读取计划书对象并提取文本或构建图片输入；模型返回的九个维度评分、证据、缺口和分析步骤会原样规范化写入 `analysis_jobs.result`，同时将维度分数落到 `analysis_dimension_scores` 方便查询和统计。
 
 新增相互独立的业务（例如 `users`、`billing`、`jobs`）时，创建同级包。只有当共享代码拥有清晰、可单独描述的职责时，才提取新包。

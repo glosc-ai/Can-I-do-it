@@ -15,8 +15,9 @@ init: ## 创建本地配置并安装依赖
 dev: ## 一键启动开发环境（Vue 热更新 + Go + PostgreSQL + Redis）
 	docker compose -f docker-compose.dev.yml up --build
 
-up: ## 构建并启动生产形态容器
-	docker compose up --build -d
+up: ## 拉取最新镜像并启动生产形态容器
+	docker compose pull
+	docker compose up -d
 
 down: ## 停止开发及生产容器
 	docker compose -f docker-compose.dev.yml down --remove-orphans

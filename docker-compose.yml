@@ -41,9 +41,10 @@ services:
       retries: 10
 
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # 从 GitHub Container Registry 拉取预构建镜像。
+    # 默认跟随 latest，可用 APP_IMAGE_TAG 固定到具体版本（如 1.0.0 / sha-607c77a）。
+    image: ghcr.io/glosc-ai/can-i-do-it:${APP_IMAGE_TAG:-latest}
+    pull_policy: always
     restart: unless-stopped
     environment:
       APP_ENV: production

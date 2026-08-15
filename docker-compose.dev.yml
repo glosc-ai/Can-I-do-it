@@ -41,7 +41,13 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-debug}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       DB_DRIVER: postgres
-      DATABASE_URL: postgres://app:app@postgres:5432/app?sslmode=disable
+      # Derived from the POSTGRES_* values below (see docker-compose.yml).
+      DATABASE_URL: ${DATABASE_URL:-}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       AUTO_MIGRATE: "true"
       REDIS_ADDR: redis:6379
       JWT_SECRET: ${JWT_SECRET:-development-only-secret-change-before-release}

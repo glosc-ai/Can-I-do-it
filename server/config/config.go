@@ -3,6 +3,8 @@ package config
 import (
 	"cmp"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -159,7 +161,7 @@ func Load() (Config, error) {
 		CORSOrigins: splitList(cmp.Or(os.Getenv("CORS_ORIGINS"), "http://localhost:5173")),
 		Database: Database{
 			Driver:          driver,
-			URL:             cmp.Or(os.Getenv("DATABASE_URL"), defaultDatabaseURL(driver)),
+			URL:             databaseURL(driver),
 			AutoMigrate:     autoMigrate,
 			MaxOpenConns:    maxOpen,
 			MaxIdleConns:    maxIdle,
@@ -197,11 +199,52 @@ func Load() (Config, error) {
 	}, nil
 }
 
-func defaultDatabaseURL(driver string) string {
-	if driver == "mysql" {
-		return "app:app@tcp(localhost:3306)/app?parseTime=true&charset=utf8mb4"
+// databaseURL resolves the DSN used to reach the database. An explicit
+// DATABASE_URL always wins so existing deployments keep working, but when it is
+// empty the DSN is assembled from the same discrete variables that provision the
+// server (POSTGRES_* / MYSQL_*). Deriving it removes the failure mode where
+// rotating POSTGRES_PASSWORD reprovisions the database yet leaves a stale
+// password baked into a hand-written DATABASE_URL, which surfaces at startup as
+// "password authentication failed (SQLSTATE 28P01)".
+func databaseURL(driver string) string {
+	if explicit := strings.TrimSpace(os.Getenv("DATABASE_URL")); explicit != "" {
+		return explicit
 	}
-	return "postgres://app:app@localhost:5432/app?sslmode=disable"
+	if driver == "mysql" {
+		return mysqlDSN()
+	}
+	return postgresDSN()
+}
+
+func postgresDSN() string {
+	user := cmp.Or(os.Getenv("POSTGRES_USER"), "app")
+	password := cmp.Or(os.Getenv("POSTGRES_PASSWORD"), "app")
+	host := cmp.Or(os.Getenv("POSTGRES_HOST"), "localhost")
+	port := cmp.Or(os.Getenv("POSTGRES_PORT"), "5432")
+	name := cmp.Or(os.Getenv("POSTGRES_DB"), "app")
+	sslMode := cmp.Or(os.Getenv("POSTGRES_SSLMODE"), "disable")
+
+	dsn := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(user, password),
+		Host:     net.JoinHostPort(host, port),
+		Path:     "/" + name,
+		RawQuery: url.Values{"sslmode": {sslMode}}.Encode(),
+	}
+	return dsn.String()
+}
+
+func mysqlDSN() string {
+	user := cmp.Or(os.Getenv("MYSQL_USER"), "app")
+	password := cmp.Or(os.Getenv("MYSQL_PASSWORD"), "app")
+	host := cmp.Or(os.Getenv("MYSQL_HOST"), "localhost")
+	port := cmp.Or(os.Getenv("MYSQL_PORT"), "3306")
+	name := cmp.Or(os.Getenv("MYSQL_DATABASE"), "app")
+
+	// The go-sql-driver DSN is not a URL, so credentials are interpolated
+	// verbatim rather than percent-encoded.
+	return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=true&charset=utf8mb4",
+		user, password, net.JoinHostPort(host, port), name)
 }
 
 func envBool(name string, fallback bool) (bool, error) {

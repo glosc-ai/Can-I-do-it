@@ -20,7 +20,7 @@ make fmt        # gofmt -w server/
 make init       # cp .env.example .env, go mod download, npm ci
 make db         # start Postgres + Redis only
 make api        # go run . (needs env vars; Go does NOT auto-read .env — inject via shell/IDE,
-                # and point DATABASE_URL at localhost instead of the compose service names)
+                # and set POSTGRES_HOST=localhost instead of the compose service names)
 make web        # vite dev server
 
 # Single Go test
@@ -53,4 +53,5 @@ cd web && npx shadcn-vue@latest add <name>
 
 - API responses: success `{"data": ...}`, error `{"error": {"code": "snake_case", "message": "..."}}`.
 - All runtime config comes from env vars (`server/config/config.go` is the single source). `production` rejects empty/short `JWT_SECRET` (< 32 chars); `development` gets a built-in fallback secret.
+- **`DATABASE_URL` is derived, not hardcoded**: when it is empty, `config.databaseURL` assembles the DSN from the same `POSTGRES_*` / `MYSQL_*` variables that provision the DB container, percent-encoding credentials. An explicit `DATABASE_URL` still wins. Don't reintroduce a literal DSN default in the compose files — that is what caused rotated passwords to fail auth with `SQLSTATE 28P01`.
 - `.env` is consumed by docker compose only; the Go process itself does not load it.

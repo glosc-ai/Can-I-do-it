@@ -116,11 +116,33 @@ make down
 
 默认使用 PostgreSQL。API 启动时在 `AUTO_MIGRATE=true` 的情况下读取对应驱动目录中的 SQL，并按文件名顺序执行尚未应用的迁移。PostgreSQL 迁移在事务中执行；MySQL 的 DDL 会隐式提交，因此失败时可能需要人工回滚已经执行的语句。
 
+### 连接串（DATABASE_URL）
+
+`DATABASE_URL` 留空时，服务端会用初始化数据库容器的同一批变量自动拼接连接串，
+所以改密码只需要改一处，不会出现容器已用新密码、连接串里还留着旧密码而报
+`password authentication failed for user ... (SQLSTATE 28P01)` 的情况。密码里的
+特殊字符（`@`、`:`、`/`、`?`）会自动做 percent-encoding。
+
+| 驱动       | 参与拼接的变量                                                                        |
+| ---------- | ------------------------------------------------------------------------------------- |
+| `postgres` | `POSTGRES_HOST`、`POSTGRES_PORT`、`POSTGRES_DB`、`POSTGRES_USER`、`POSTGRES_PASSWORD`、`POSTGRES_SSLMODE` |
+| `mysql`    | `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USER`、`MYSQL_PASSWORD`           |
+
+显式填写 `DATABASE_URL` 时以它为准（连接外部数据库或需要额外连接参数时用），
+上面的分项变量将不再参与拼接。宿主机直连（`make api`）把 host 指向 `localhost`：
+
+```env
+POSTGRES_HOST=localhost
+```
+
 切换 MySQL：
 
 ```env
 DB_DRIVER=mysql
-DATABASE_URL=app:app@tcp(localhost:3306)/app?parseTime=true&charset=utf8mb4
+MYSQL_HOST=localhost
+MYSQL_DATABASE=app
+MYSQL_USER=app
+MYSQL_PASSWORD=app
 ```
 
 为每次 schema 修改新增有序文件，例如：

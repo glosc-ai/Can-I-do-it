@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   ArrowUpIcon,
   BrainCircuitIcon,
   FileTextIcon,
+  Globe2Icon,
   LightbulbIcon,
   PaperclipIcon,
   SparklesIcon,
   XIcon,
 } from '@lucide/vue'
 import { toast } from '@/lib/message'
+import { searchSimilarPlans, type SimilarPlan } from '@/api/gallery'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useIdeaAnalysisStore } from '@/features/ideas/store'
 import { usePlansStore } from '@/features/plans/store'
 import { errorMessage, fileTypeLabel, formatSize } from '@/lib/format'
@@ -18,6 +21,7 @@ import { errorMessage, fileTypeLabel, formatSize } from '@/lib/format'
 type AnalysisMode = 'idea' | 'plan'
 
 const ACCEPTED_EXTENSIONS = ['.pdf', '.doc', '.docx', '.txt', '.md', '.png', '.jpg', '.jpeg', '.webp']
+const SIMILAR_SEARCH_DEBOUNCE_MS = 500
 
 const router = useRouter()
 const ideaStore = useIdeaAnalysisStore()
@@ -31,6 +35,45 @@ const dragging = ref(false)
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const queueing = ref(false)
+const isPublic = ref(false)
+const similarPlans = ref<SimilarPlan[]>([])
+const dismissedSimilar = ref(false)
+
+let similarSearchTimer: ReturnType<typeof setTimeout> | null = null
+
+function queryTextFor(mode: AnalysisMode) {
+  return mode === 'idea' ? idea.value.trim() : title.value.trim()
+}
+
+function scheduleSimilarSearch() {
+  if (similarSearchTimer !== null) clearTimeout(similarSearchTimer)
+  const query = queryTextFor(mode.value)
+  if (query.length < 4) {
+    similarPlans.value = []
+    return
+  }
+  similarSearchTimer = setTimeout(async () => {
+    try {
+      similarPlans.value = await searchSimilarPlans(query)
+    } catch {
+      // Non-critical: a failed similarity lookup should never block submission.
+      similarPlans.value = []
+    }
+  }, SIMILAR_SEARCH_DEBOUNCE_MS)
+}
+
+watch(idea, () => {
+  dismissedSimilar.value = false
+  if (mode.value === 'idea') scheduleSimilarSearch()
+})
+watch(title, () => {
+  dismissedSimilar.value = false
+  if (mode.value === 'plan') scheduleSimilarSearch()
+})
+
+onBeforeUnmount(() => {
+  if (similarSearchTimer !== null) clearTimeout(similarSearchTimer)
+})
 
 const submitting = computed(() => ideaStore.submitting || plansStore.uploading || queueing.value)
 const canSubmit = computed(() => {
@@ -41,10 +84,16 @@ const canSubmit = computed(() => {
 function setMode(nextMode: AnalysisMode) {
   mode.value = nextMode
   fileError.value = ''
+  dismissedSimilar.value = false
+  scheduleSimilarSearch()
   nextTick(() => {
     if (nextMode === 'idea') textareaRef.value?.focus()
     else if (!file.value) fileInputRef.value?.click()
   })
+}
+
+function viewSimilarPlan(id: number) {
+  router.push(`/gallery/${id}`)
 }
 
 function isAccepted(candidate: File) {
@@ -88,15 +137,16 @@ function attachFile() {
 async function submit() {
   if (!canSubmit.value) return
   try {
+    const visibility = isPublic.value ? 'public' : 'private'
     if (mode.value === 'idea') {
-      const plan = await ideaStore.submit({ idea: idea.value })
+      const plan = await ideaStore.submit({ idea: idea.value, visibility })
       toast.success('已开始分析', { description: 'AI 正在研究你的想法，报告完成后会自动保存。' })
       await router.push(`/plans/${plan.id}`)
       return
     }
 
     if (!file.value) return
-    const plan = await plansStore.upload(file.value, title.value.trim() || file.value.name)
+    const plan = await plansStore.upload(file.value, title.value.trim() || file.value.name, visibility)
     if (!plan) return
     queueing.value = true
     await plansStore.analyze(plan.id)
@@ -147,6 +197,40 @@ defineExpose({ focus })
           计划书分析
         </button>
       </div>
+    </div>
+
+    <!-- 相似项目提醒 -->
+    <div
+      v-if="similarPlans.length > 0 && !dismissedSimilar"
+      class="mb-4 flex items-start gap-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      role="status"
+    >
+      <Globe2Icon class="mt-0.5 size-4 shrink-0 text-primary" />
+      <div class="min-w-0 flex-1">
+        <p class="text-sm font-medium text-foreground">
+          已有 {{ similarPlans.length }} 个相似的公开项目，可以先看看别人的分析结论
+        </p>
+        <ul class="mt-2 flex flex-col gap-1">
+          <li v-for="item in similarPlans" :key="item.id">
+            <button
+              type="button"
+              class="truncate text-sm text-primary underline-offset-2 hover:underline"
+              @click="viewSimilarPlan(item.id)"
+            >
+              {{ item.title }}
+              <span v-if="item.overall_score !== undefined" class="text-muted-foreground">· {{ item.verdict }} {{ Math.round(item.overall_score) }} 分</span>
+            </button>
+          </li>
+        </ul>
+      </div>
+      <button
+        type="button"
+        class="shrink-0 rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        aria-label="关闭提醒"
+        @click="dismissedSimilar = true"
+      >
+        <XIcon class="size-4" />
+      </button>
     </div>
 
     <form
@@ -230,6 +314,12 @@ defineExpose({ focus })
           <span class="hidden h-4 w-px bg-border sm:block" />
           <span class="hidden text-xs text-muted-foreground/70 md:inline">{{ mode === 'idea' ? `${idea.trim().length} / 4000` : '上传后自动开始分析' }}</span>
         </div>
+
+        <label class="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
+          <Checkbox v-model="isPublic" aria-label="公开到项目广场" />
+          <span class="hidden sm:inline">公开到项目广场</span>
+          <Globe2Icon class="size-3.5 sm:hidden" />
+        </label>
 
         <button
           type="submit"

@@ -20,6 +20,16 @@ const router = createRouter({
       redirect: '/plans',
     },
     {
+      path: '/gallery',
+      name: 'gallery',
+      component: () => import('@/views/GalleryView.vue'),
+    },
+    {
+      path: '/gallery/:id',
+      name: 'gallery-detail',
+      component: () => import('@/views/GalleryDetailView.vue'),
+    },
+    {
       path: '/plans/:id',
       name: 'plan-detail',
       component: () => import('@/views/PlanDetailView.vue'),

@@ -1,5 +1,7 @@
 import { request } from './client'
 
+export type PlanVisibility = 'public' | 'private'
+
 export interface Plan {
   id: number
   user_id: number
@@ -8,6 +10,7 @@ export interface Plan {
   mime_type: string
   size_bytes: number
   version: number
+  visibility: PlanVisibility
   asset_id?: number
   download_url?: string
   status: string
@@ -59,11 +62,19 @@ export async function getPlan(id: number) {
   return (await request<{ data: Plan }>(`/plans/${id}`)).data
 }
 
-export async function uploadPlan(file: File, title: string) {
+export async function uploadPlan(file: File, title: string, visibility: PlanVisibility = 'private') {
   const body = new FormData()
   body.append('file', file)
   body.append('title', title)
+  body.append('visibility', visibility)
   return (await request<{ data: Plan }>('/plans', { method: 'POST', body })).data
+}
+
+export async function setPlanVisibility(id: number, visibility: PlanVisibility) {
+  return (await request<{ data: { visibility: PlanVisibility } }>(`/plans/${id}/visibility`, {
+    method: 'PATCH',
+    body: JSON.stringify({ visibility }),
+  })).data
 }
 
 export async function analyzePlan(id: number) {

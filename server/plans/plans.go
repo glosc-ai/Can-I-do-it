@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"github.com/gloscai/template-go-vue3-docker/server/httputil"
 	"github.com/gloscai/template-go-vue3-docker/server/storage"
 	"github.com/gloscai/template-go-vue3-docker/server/users"
+	"github.com/redis/go-redis/v9"
 )
 
 type Service struct {
@@ -23,22 +25,49 @@ type Service struct {
 	driver      string
 	store       *storage.Service
 	assetRecord *assets.Service
+	redis       *redis.Client
 	dir         string // retained for compatibility with callers of New
 	max         int64
 }
 type Plan struct {
 	ID          int64     `json:"id"`
-	UserID      int64     `json:"user_id"`
+	UserID      int64     `json:"user_id,omitempty"`
 	Title       string    `json:"title"`
 	Filename    string    `json:"filename"`
 	MimeType    string    `json:"mime_type"`
 	Status      string    `json:"status"`
 	Size        int64     `json:"size_bytes"`
 	Version     int       `json:"version"`
+	Visibility  string    `json:"visibility"`
 	AssetID     *int64    `json:"asset_id,omitempty"`
 	DownloadURL string    `json:"download_url,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// GalleryPlan is the public, read-only projection of a Plan shown in the
+// gallery. It intentionally omits UserID and only exposes the author's
+// display identity.
+type GalleryPlan struct {
+	ID           int64     `json:"id"`
+	Title        string    `json:"title"`
+	Filename     string    `json:"filename"`
+	MimeType     string    `json:"mime_type"`
+	OverallScore *float64  `json:"overall_score,omitempty"`
+	Verdict      string    `json:"verdict,omitempty"`
+	AuthorName   string    `json:"author_name"`
+	AuthorAvatar string    `json:"author_avatar,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// SimilarPlan is the compact shape returned by the fuzzy-match search used
+// to warn users about existing public analyses before they submit a new one.
+type SimilarPlan struct {
+	ID           int64     `json:"id"`
+	Title        string    `json:"title"`
+	OverallScore *float64  `json:"overall_score,omitempty"`
+	Verdict      string    `json:"verdict,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 type Analysis struct {
@@ -85,8 +114,8 @@ func New(db *sql.DB, driver, dir string, max int64) *Service {
 	return &Service{db: db, driver: driver, dir: dir, max: max, store: storage.New(nil, driver, "", dir, max, storage.R2Config{})}
 }
 
-func NewWithStorage(db *sql.DB, driver string, store *storage.Service, recorder *assets.Service, max int64) *Service {
-	return &Service{db: db, driver: driver, store: store, assetRecord: recorder, max: max}
+func NewWithStorage(db *sql.DB, driver string, store *storage.Service, recorder *assets.Service, redisClient *redis.Client, max int64) *Service {
+	return &Service{db: db, driver: driver, store: store, assetRecord: recorder, redis: redisClient, max: max}
 }
 func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/plans", s.list)
@@ -94,13 +123,17 @@ func (s *Service) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/plans/{id}/analyze", s.analyze)
 	mux.HandleFunc("GET /api/v1/plans/{id}/analysis", s.analysis)
 	mux.HandleFunc("POST /api/v1/plans/{id}/analysis/retry", s.retryAnalysis)
+	mux.HandleFunc("PATCH /api/v1/plans/{id}/visibility", s.setVisibility)
 	mux.HandleFunc("GET /api/v1/plans/{id}", s.get)
 	mux.HandleFunc("GET /api/v1/admin/plans", s.adminList)
 	mux.HandleFunc("GET /api/v1/admin/analysis", s.adminAnalysis)
+	mux.HandleFunc("GET /api/v1/gallery/plans", s.galleryList)
+	mux.HandleFunc("GET /api/v1/gallery/plans/{id}", s.galleryGet)
+	mux.HandleFunc("GET /api/v1/gallery/similar", s.gallerySimilar)
 }
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
-	rows, e := s.db.QueryContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans WHERE user_id=? ORDER BY created_at DESC"), u.ID)
+	rows, e := s.db.QueryContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,visibility,created_at,updated_at FROM business_plans WHERE user_id=? ORDER BY created_at DESC"), u.ID)
 	if e != nil {
 		httputil.WriteError(w, 500, "internal_error", "could not list plans")
 		return
@@ -109,7 +142,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	items := []Plan{}
 	for rows.Next() {
 		var p Plan
-		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
+		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.Visibility, &p.CreatedAt, &p.UpdatedAt) == nil {
 			items = append(items, p)
 		}
 	}
@@ -135,6 +168,14 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	if title == "" {
 		title = header.Filename
 	}
+	visibility := strings.TrimSpace(r.FormValue("visibility"))
+	if visibility == "" {
+		visibility = "private"
+	}
+	if visibility != "public" && visibility != "private" {
+		httputil.WriteError(w, 400, "invalid_visibility", "visibility must be public or private")
+		return
+	}
 	if header.Size > s.max {
 		httputil.WriteError(w, 413, "file_too_large", "file is too large")
 		return
@@ -156,10 +197,11 @@ func (s *Service) create(w http.ResponseWriter, r *http.Request) {
 	p.Size = header.Size
 	p.Version = 1
 	p.Status = "uploaded"
+	p.Visibility = visibility
 	if s.driver == "postgres" {
-		e = s.db.QueryRowContext(r.Context(), "INSERT INTO business_plans (user_id,title,filename,mime_type,object_key,size_bytes) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,created_at", u.ID, title, p.Filename, p.MimeType, key, p.Size).Scan(&p.ID, &p.CreatedAt)
+		e = s.db.QueryRowContext(r.Context(), "INSERT INTO business_plans (user_id,title,filename,mime_type,object_key,size_bytes,visibility) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id,created_at", u.ID, title, p.Filename, p.MimeType, key, p.Size, visibility).Scan(&p.ID, &p.CreatedAt)
 	} else {
-		res, x := s.db.ExecContext(r.Context(), "INSERT INTO business_plans (user_id,title,filename,mime_type,object_key,size_bytes) VALUES (?,?,?,?,?,?)", u.ID, title, p.Filename, p.MimeType, key, p.Size)
+		res, x := s.db.ExecContext(r.Context(), "INSERT INTO business_plans (user_id,title,filename,mime_type,object_key,size_bytes,visibility) VALUES (?,?,?,?,?,?,?)", u.ID, title, p.Filename, p.MimeType, key, p.Size, visibility)
 		e = x
 		if e == nil {
 			p.ID, _ = res.LastInsertId()
@@ -213,7 +255,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 	u, _ := users.UserFromContext(r.Context())
 	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	var p Plan
-	e := s.db.QueryRowContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans WHERE id=? AND user_id=?"), id, u.ID).Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt)
+	e := s.db.QueryRowContext(r.Context(), s.q("SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,visibility,created_at,updated_at FROM business_plans WHERE id=? AND user_id=?"), id, u.ID).Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.Visibility, &p.CreatedAt, &p.UpdatedAt)
 	if e == sql.ErrNoRows {
 		httputil.WriteError(w, 404, "not_found", "plan not found")
 		return
@@ -328,6 +370,241 @@ func (s *Service) retryAnalysis(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), "queued", id)
 	httputil.WriteJSON(w, 202, map[string]any{"data": map[string]any{"id": jobID, "status": "queued"}})
+}
+
+func (s *Service) setVisibility(w http.ResponseWriter, r *http.Request) {
+	u, _ := users.UserFromContext(r.Context())
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteError(w, 400, "invalid_id", "plan id must be a positive integer")
+		return
+	}
+	var in struct {
+		Visibility string `json:"visibility"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<10)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || (in.Visibility != "public" && in.Visibility != "private") {
+		httputil.WriteError(w, 422, "invalid_visibility", "visibility must be public or private")
+		return
+	}
+	var ownerID int64
+	if err := s.db.QueryRowContext(r.Context(), s.q("SELECT user_id FROM business_plans WHERE id=?"), id).Scan(&ownerID); err != nil {
+		if err == sql.ErrNoRows {
+			httputil.WriteError(w, 404, "not_found", "plan not found")
+		} else {
+			httputil.WriteError(w, 500, "internal_error", "could not load plan")
+		}
+		return
+	}
+	if ownerID != u.ID {
+		httputil.WriteError(w, 403, "forbidden", "not your plan")
+		return
+	}
+	if _, err := s.db.ExecContext(r.Context(), s.q("UPDATE business_plans SET visibility=?,updated_at=CURRENT_TIMESTAMP WHERE id=?"), in.Visibility, id); err != nil {
+		httputil.WriteError(w, 500, "internal_error", "could not update visibility")
+		return
+	}
+	httputil.WriteJSON(w, 200, map[string]any{"data": map[string]string{"visibility": in.Visibility}})
+}
+
+// galleryRateLimit enforces a per-IP request budget on the anonymous gallery
+// endpoints using a Redis fixed window counter, so the fuzzy-match search and
+// listing cannot be scraped or hammered by unauthenticated clients.
+func (s *Service) galleryRateLimit(w http.ResponseWriter, r *http.Request) bool {
+	if s.redis == nil {
+		return true
+	}
+	const limit = 30
+	const window = time.Minute
+	key := "ratelimit:gallery:" + clientIP(r)
+	count, err := s.redis.Incr(r.Context(), key).Result()
+	if err != nil {
+		// Redis being unavailable should not take down a public read endpoint.
+		return true
+	}
+	if count == 1 {
+		s.redis.Expire(r.Context(), key, window)
+	}
+	if count > limit {
+		httputil.WriteError(w, 429, "rate_limited", "too many requests, please slow down")
+		return false
+	}
+	return true
+}
+
+// clientIP identifies the caller for rate limiting. It deliberately does not
+// trust X-Forwarded-For: nginx's $proxy_add_x_forwarded_for appends to
+// whatever the client already sent, so the leftmost entry is attacker
+// controlled and would let anyone reset their own rate-limit key on every
+// request. X-Real-IP is safe because nginx sets it from $remote_addr via
+// proxy_set_header, which replaces rather than appends, so a client-supplied
+// value is discarded before it reaches this handler.
+func clientIP(r *http.Request) string {
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// latestJobFragment returns the SELECT column expressions and (for
+// Postgres) the JOIN clause needed to pull each plan's most recent
+// analysis_jobs row inline. Postgres uses a LATERAL join; MySQL, which has
+// no LATERAL support in the versions targeted here, inlines the same lookup
+// as two correlated scalar subqueries instead. Centralising this here keeps
+// the "latest job" definition in one place for every gallery query that
+// needs it.
+func latestJobFragment(driver string) (cols, join string) {
+	if driver == "postgres" {
+		return "j.overall_score,j.verdict", "LEFT JOIN LATERAL (SELECT overall_score,verdict FROM analysis_jobs WHERE plan_id=p.id ORDER BY id DESC LIMIT 1) j ON true"
+	}
+	return "(SELECT overall_score FROM analysis_jobs WHERE plan_id=p.id ORDER BY id DESC LIMIT 1),(SELECT verdict FROM analysis_jobs WHERE plan_id=p.id ORDER BY id DESC LIMIT 1)", ""
+}
+
+func (s *Service) galleryList(w http.ResponseWriter, r *http.Request) {
+	if !s.galleryRateLimit(w, r) {
+		return
+	}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 50 {
+		pageSize = 50
+	}
+	jobCols, jobJoin := latestJobFragment(s.driver)
+	query := s.q(fmt.Sprintf(`SELECT p.id,p.title,p.filename,p.mime_type,p.created_at,%s,
+		COALESCE(NULLIF(u.nickname,''),u.name) AS author_name,u.avatar
+		FROM business_plans p
+		JOIN users u ON u.id=p.user_id
+		%s
+		WHERE p.visibility='public' AND p.status='completed'
+		ORDER BY p.created_at DESC LIMIT ? OFFSET ?`, jobCols, jobJoin))
+	rows, err := s.db.QueryContext(r.Context(), query, pageSize, (page-1)*pageSize)
+	if err != nil {
+		httputil.WriteError(w, 500, "internal_error", "could not list gallery plans")
+		return
+	}
+	defer rows.Close()
+	items := []GalleryPlan{}
+	for rows.Next() {
+		var g GalleryPlan
+		var score sql.NullFloat64
+		var verdict, avatar sql.NullString
+		if rows.Scan(&g.ID, &g.Title, &g.Filename, &g.MimeType, &g.CreatedAt, &score, &verdict, &g.AuthorName, &avatar) == nil {
+			if score.Valid {
+				g.OverallScore = &score.Float64
+			}
+			g.Verdict = verdict.String
+			g.AuthorAvatar = avatar.String
+			items = append(items, g)
+		}
+	}
+	httputil.WriteJSON(w, 200, map[string]any{"data": items})
+}
+
+func (s *Service) galleryGet(w http.ResponseWriter, r *http.Request) {
+	if !s.galleryRateLimit(w, r) {
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httputil.WriteError(w, 400, "invalid_id", "plan id must be a positive integer")
+		return
+	}
+	var p Plan
+	var authorName string
+	var avatar sql.NullString
+	e := s.db.QueryRowContext(r.Context(), s.q(`SELECT p.id,p.user_id,p.title,p.filename,p.mime_type,p.size_bytes,p.version,p.status,p.visibility,p.created_at,p.updated_at,
+		COALESCE(NULLIF(u.nickname,''),u.name),u.avatar
+		FROM business_plans p JOIN users u ON u.id=p.user_id
+		WHERE p.id=? AND p.visibility='public' AND p.status='completed'`), id).
+		Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.Visibility, &p.CreatedAt, &p.UpdatedAt, &authorName, &avatar)
+	if e == sql.ErrNoRows {
+		// Deliberately identical to "does not exist" for a private plan: the
+		// gallery must not leak which private plan IDs exist.
+		httputil.WriteError(w, 404, "not_found", "plan not found")
+		return
+	}
+	if e != nil {
+		httputil.WriteError(w, 500, "internal_error", "could not load plan")
+		return
+	}
+	// Anonymous visitors get the author's display identity via author_name/
+	// author_avatar below; the internal numeric user_id must not leak here,
+	// unlike the owner-scoped /api/v1/plans/{id} endpoint.
+	p.UserID = 0
+	job, err := s.latestAnalysis(r.Context(), id)
+	var analysis *Analysis
+	if err == nil {
+		analysis = &job
+	} else if err != sql.ErrNoRows {
+		httputil.WriteError(w, 500, "internal_error", "could not load analysis")
+		return
+	}
+	httputil.WriteJSON(w, 200, map[string]any{"data": map[string]any{
+		"plan":          p,
+		"author_name":   authorName,
+		"author_avatar": avatar.String,
+		"analysis":      analysis,
+	}})
+}
+
+func (s *Service) gallerySimilar(w http.ResponseWriter, r *http.Request) {
+	if !s.galleryRateLimit(w, r) {
+		return
+	}
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if len(q) < 2 {
+		httputil.WriteJSON(w, 200, map[string]any{"data": []SimilarPlan{}})
+		return
+	}
+	if len(q) > 200 {
+		q = q[:200]
+	}
+	jobCols, jobJoin := latestJobFragment(s.driver)
+	var query string
+	var args []any
+	if s.driver == "postgres" {
+		query = s.q(fmt.Sprintf(`SELECT p.id,p.title,%s,p.created_at
+			FROM business_plans p
+			%s
+			WHERE p.visibility='public' AND p.status='completed' AND similarity(p.title,?) > 0.3
+			ORDER BY similarity(p.title,?) DESC LIMIT 5`, jobCols, jobJoin))
+		args = []any{q, q}
+	} else {
+		query = s.q(fmt.Sprintf(`SELECT p.id,p.title,%s,p.created_at
+			FROM business_plans p
+			WHERE p.visibility='public' AND p.status='completed' AND MATCH(p.title) AGAINST(? IN NATURAL LANGUAGE MODE)
+			LIMIT 5`, jobCols))
+		args = []any{q}
+	}
+	rows, err := s.db.QueryContext(r.Context(), query, args...)
+	if err != nil {
+		httputil.WriteError(w, 500, "internal_error", "could not search similar plans")
+		return
+	}
+	defer rows.Close()
+	items := []SimilarPlan{}
+	for rows.Next() {
+		var sp SimilarPlan
+		var score sql.NullFloat64
+		var verdict sql.NullString
+		if rows.Scan(&sp.ID, &sp.Title, &score, &verdict, &sp.CreatedAt) == nil {
+			if score.Valid {
+				sp.OverallScore = &score.Float64
+			}
+			sp.Verdict = verdict.String
+			items = append(items, sp)
+		}
+	}
+	httputil.WriteJSON(w, 200, map[string]any{"data": items})
 }
 
 func (s *Service) latestAnalysis(ctx context.Context, planID int64) (Analysis, error) {
@@ -455,7 +732,7 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, 403, "owner_required", "owner permission required")
 		return
 	}
-	rows, e := s.db.QueryContext(r.Context(), "SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,created_at,updated_at FROM business_plans ORDER BY created_at DESC LIMIT 200")
+	rows, e := s.db.QueryContext(r.Context(), "SELECT id,user_id,title,filename,mime_type,size_bytes,version,status,visibility,created_at,updated_at FROM business_plans ORDER BY created_at DESC LIMIT 200")
 	if e != nil {
 		httputil.WriteError(w, 500, "internal_error", "could not list plans")
 		return
@@ -464,7 +741,7 @@ func (s *Service) adminList(w http.ResponseWriter, r *http.Request) {
 	items := []Plan{}
 	for rows.Next() {
 		var p Plan
-		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.CreatedAt, &p.UpdatedAt) == nil {
+		if rows.Scan(&p.ID, &p.UserID, &p.Title, &p.Filename, &p.MimeType, &p.Size, &p.Version, &p.Status, &p.Visibility, &p.CreatedAt, &p.UpdatedAt) == nil {
 			items = append(items, p)
 		}
 	}

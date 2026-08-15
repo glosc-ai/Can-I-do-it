@@ -50,6 +50,10 @@
 | POST | `/api/v1/plans/{id}/analyze` | 登录 | 创建异步分析任务 |
 | GET | `/api/v1/plans/{id}/analysis` | 登录 | 获取计划书的最新分析任务 |
 | POST | `/api/v1/plans/{id}/analysis/retry` | 登录 | 重新入队失败的分析任务 |
+| PATCH | `/api/v1/plans/{id}/visibility` | 登录 | 切换计划书公开/私有 |
+| GET | `/api/v1/gallery/plans` | 公开 | 分页获取已公开且分析成功的项目 |
+| GET | `/api/v1/gallery/plans/{id}` | 公开 | 获取单个公开项目的完整分析报告 |
+| GET | `/api/v1/gallery/similar` | 公开 | 按标题模糊匹配已公开的相似项目 |
 | GET | `/api/v1/assets` | 登录 | 获取当前用户的素材对象 |
 | POST | `/api/v1/assets` | 登录 | 上传或登记素材（upload / ai_generated / fetched） |
 | GET | `/api/v1/assets/{id}` | 登录 | 获取素材元数据和下载链接 |
@@ -193,6 +197,7 @@
   "status": "uploaded",
   "size_bytes": 102400,
   "version": 1,
+  "visibility": "private",
   "asset_id": 18,
   "download_url": "/api/v1/assets/18/download",
   "created_at": "2026-08-08T12:00:00Z",
@@ -200,7 +205,7 @@
 }
 ```
 
-`status` 取值：`uploaded`（待分析）、`queued`（排队中）、`processing`（分析中）、`completed`（已完成）、`failed`（失败）。
+`status` 取值：`uploaded`（待分析）、`queued`（排队中）、`processing`（分析中）、`completed`（已完成）、`failed`（失败）。`visibility` 取值：`private`（默认，仅本人可见）、`public`（分析成功后会出现在项目广场）。
 
 ### `GET /api/v1/plans`
 
@@ -218,6 +223,7 @@
 | --- | --- | --- |
 | `file` | 是 | 计划书文件或图片，当前最大 20 MiB；支持 PDF、DOC/DOCX、TXT/Markdown、PNG/JPG/WEBP |
 | `title` | 否 | 标题；为空时使用原始文件名 |
+| `visibility` | 否 | `public` 或 `private`；为空时默认为 `private` |
 
 成功返回 `201` 和计划书对象。可能错误：`400 file_required`、`400 unsupported_file_type`、`413 file_too_large`、`500 storage_error`。
 
@@ -278,6 +284,81 @@ curl -X POST http://localhost:5173/api/v1/plans \
 ### `POST /api/v1/plans/{id}/analysis/retry`
 
 将最新一条 `failed` 分析任务重新置为 `queued`。仅计划书所属用户或 Owner 可操作。无请求体，成功返回 `202` 和任务 id；没有失败任务时返回 `409 not_retryable`，无权操作返回 `403 forbidden`。
+
+### `PATCH /api/v1/plans/{id}/visibility`
+
+仅计划书所属用户可操作。请求体：
+
+```json
+{"visibility":"public"}
+```
+
+`visibility` 必须为 `public` 或 `private`，否则返回 `422 invalid_visibility`。成功返回 `200`：
+
+```json
+{"data":{"visibility":"public"}}
+```
+
+设为 `public` 不要求分析已经完成；项目广场只展示 `visibility=public` 且 `status=completed` 的计划书，其余状态下切换公开只是预先设置好可见性。不存在返回 `404 not_found`，不属于当前用户返回 `403 forbidden`。
+
+## 项目广场
+
+项目广场展示所有用户主动公开、且分析已成功完成的计划书，任何人无需登录即可访问。这三个接口按客户端 IP 做了 Redis 限流（每分钟 30 次），超出后返回 `429 rate_limited`。
+
+### `GET /api/v1/gallery/plans`
+
+分页返回公开项目列表，按创建时间倒序排列。查询参数 `page`（默认 1）、`page_size`（默认 20，最大 50）。
+
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "title": "社区咖啡店计划书",
+      "filename": "plan.pdf",
+      "mime_type": "application/pdf",
+      "overall_score": 74,
+      "verdict": "有条件可行",
+      "author_name": "小莫",
+      "author_avatar": "https://example.com/avatar.png",
+      "created_at": "2026-08-08T12:00:00Z"
+    }
+  ]
+}
+```
+
+`author_name` 取用户昵称，昵称为空时回退到 SSO 姓名；不返回 `user_id`。
+
+### `GET /api/v1/gallery/plans/{id}`
+
+返回单个公开项目的计划书信息、作者信息与完整分析结果：
+
+```json
+{
+  "data": {
+    "plan": { "id": 1, "title": "…", "visibility": "public", "status": "completed", "…": "…" },
+    "author_name": "小莫",
+    "author_avatar": "https://example.com/avatar.png",
+    "analysis": { "id": 12, "overall_score": 74, "dimensions": [], "…": "…" }
+  }
+}
+```
+
+`plan.user_id` 会被清零，不对匿名访客暴露作者的内部用户 ID；作者身份只通过 `author_name`/`author_avatar` 暴露。计划书不存在、未公开或未分析成功时统一返回 `404 not_found`（不区分"不存在"和"存在但不可见"，避免泄露私有计划书的存在性）。
+
+### `GET /api/v1/gallery/similar`
+
+按标题对已公开且分析成功的项目做模糊匹配，用于提交分析前提醒用户是否已有相似项目。查询参数 `q`（必填，2–200 字符）。最多返回 5 条，按相似度排序：
+
+```json
+{
+  "data": [
+    {"id": 1, "title": "社区咖啡店计划书", "overall_score": 74, "verdict": "有条件可行", "created_at": "2026-08-08T12:00:00Z"}
+  ]
+}
+```
+
+`q` 长度不足 2 时直接返回空列表。Postgres 使用 `pg_trgm` 的 `similarity()` 函数（阈值 0.3），MySQL 使用 `FULLTEXT` 自然语言匹配；两者语义均为近似匹配，不保证跨语言/跨分词器结果完全一致。
 
 ## 素材对象
 

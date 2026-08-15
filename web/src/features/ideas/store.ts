@@ -1,10 +1,11 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { analyzePlan, uploadPlan } from '@/api/plans'
+import { analyzePlan, uploadPlan, type PlanVisibility } from '@/api/plans'
 
 interface IdeaInput {
   idea: string
   context?: string
+  visibility?: PlanVisibility
 }
 
 export const useIdeaAnalysisStore = defineStore('idea-analysis', () => {
@@ -24,7 +25,7 @@ export const useIdeaAnalysisStore = defineStore('idea-analysis', () => {
         '\n\n【分析要求】\n请围绕这个想法进行完整的市场调查与商业可行性分析。明确区分已知事实、合理假设与需要验证的内容。',
       ].join('')
       const file = new File([source], 'idea-analysis.txt', { type: 'text/plain' })
-      const plan = await uploadPlan(file, `想法：${title}`)
+      const plan = await uploadPlan(file, `想法：${title}`, input.visibility ?? 'private')
       await analyzePlan(plan.id)
       return plan
     } finally {

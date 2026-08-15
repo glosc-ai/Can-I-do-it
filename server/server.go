@@ -64,7 +64,7 @@ func run(ctx context.Context) error {
 		ForcePathStyle:  cfg.Storage.R2.ForcePathStyle,
 	})
 	assetService := assets.New(db, cfg.Database.Driver, objectStore, cfg.Storage.MaxUploadBytes)
-	plans.NewWithStorage(db, cfg.Database.Driver, objectStore, assetService, cfg.Storage.MaxUploadBytes).Register(mux)
+	plans.NewWithStorage(db, cfg.Database.Driver, objectStore, assetService, redisClient, cfg.Storage.MaxUploadBytes).Register(mux)
 	assetService.Register(mux)
 	settings.New(db, cfg.Database.Driver, cfg.EncryptionKey, objectStore).Register(mux)
 	go analysis.NewWorkerWithStorage(db, cfg.Database.Driver, cfg.EncryptionKey, objectStore, cfg.Storage.MaxUploadBytes, assetService).Run(ctx)

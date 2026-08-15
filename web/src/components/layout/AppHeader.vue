@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
+  Globe2Icon,
   LightbulbIcon,
   LogOutIcon,
   MonitorIcon,
@@ -86,6 +87,17 @@ async function signOut() {
 
       <!-- 右侧导航 -->
       <nav class="flex items-center gap-0.5" aria-label="主导航">
+        <Button
+          variant="ghost"
+          size="sm"
+          as="a"
+          href="/gallery"
+          class="gap-1.5 transition-all duration-200 hover:text-primary"
+          aria-label="项目广场"
+        >
+          <Globe2Icon class="size-4" />
+          <span class="hidden md:inline">项目广场</span>
+        </Button>
         <template v-if="auth.user">
           <Button
             variant="ghost"

@@ -7,7 +7,9 @@ import {
   ClockIcon,
   DownloadIcon,
   FileTextIcon,
+  Globe2Icon,
   HashIcon,
+  LockIcon,
   PackageIcon,
   PlayIcon,
   RotateCcwIcon,
@@ -18,6 +20,7 @@ import {
   getAnalysis,
   getPlan,
   retryAnalysis,
+  setPlanVisibility,
   type Analysis,
   type Plan,
 } from '@/api/plans'
@@ -116,6 +119,25 @@ async function retry() {
   }
 }
 
+const visibilityPending = ref(false)
+
+async function toggleVisibility() {
+  if (!plan.value || visibilityPending.value) return
+  const next = plan.value.visibility === 'public' ? 'private' : 'public'
+  visibilityPending.value = true
+  try {
+    await setPlanVisibility(plan.value.id, next)
+    plan.value.visibility = next
+    toast.success(next === 'public' ? '已公开到项目广场' : '已设为私有', {
+      description: next === 'public' ? '其他人现在可以在项目广场看到完整报告。' : '只有你能看到这份报告了。',
+    })
+  } catch (error) {
+    toast.error('切换失败', { description: errorMessage(error) })
+  } finally {
+    visibilityPending.value = false
+  }
+}
+
 onMounted(() => {
   if (notFound.value) {
     loading.value = false
@@ -183,6 +205,16 @@ onUnmounted(clearPoll)
           </div>
           <!-- 操作按钮组 -->
           <div class="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              :disabled="visibilityPending"
+              class="gap-2 transition-all duration-150"
+              @click="toggleVisibility"
+            >
+              <Globe2Icon v-if="plan.visibility === 'public'" class="size-4" />
+              <LockIcon v-else class="size-4" />
+              {{ plan.visibility === 'public' ? '已公开，点击设为私有' : '设为公开' }}
+            </Button>
             <Button
               v-if="plan.download_url"
               as="a"

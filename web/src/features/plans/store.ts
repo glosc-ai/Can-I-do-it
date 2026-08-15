@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { analyzePlan, listPlans, uploadPlan, type Plan } from '@/api/plans'
+import { analyzePlan, listPlans, uploadPlan, type Plan, type PlanVisibility } from '@/api/plans'
 import { isPlanActive } from './status'
 
 const POLL_INTERVAL_MS = 3000
@@ -49,11 +49,11 @@ export const usePlansStore = defineStore('plans', () => {
     }
   }
 
-  async function upload(file: File, title: string) {
+  async function upload(file: File, title: string, visibility: PlanVisibility = 'private') {
     if (uploading.value) return null
     uploading.value = true
     try {
-      const plan = await uploadPlan(file, title)
+      const plan = await uploadPlan(file, title, visibility)
       await fetch()
       return plan
     } finally {

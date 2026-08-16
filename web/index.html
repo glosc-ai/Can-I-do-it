@@ -1,24 +1,53 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Can I Do It — 上传商业计划书，获得 AI 可行性分析">
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#101010">
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Can I Do It — 上传商业计划书，获得 AI 可行性分析"
+    />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: light)"
+      content="#ffffff"
+    />
+    <meta
+      name="theme-color"
+      media="(prefers-color-scheme: dark)"
+      content="#101010"
+    />
     <title>Can I Do It — 我能做这个吗</title>
     <script>
       // Apply the saved theme before first paint to avoid a light/dark flash.
-      ;(function () {
-        var mode = 'system'
+      (function () {
+        var mode = "system";
         try {
-          var stored = window.localStorage.getItem('can-i-do-it-theme')
-          if (stored === 'light' || stored === 'dark' || stored === 'system') mode = stored
+          var stored = window.localStorage.getItem("can-i-do-it-theme");
+          if (stored === "light" || stored === "dark" || stored === "system")
+            mode = stored;
         } catch (e) {}
-        var dark = mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-        document.documentElement.classList.toggle('dark', dark)
-        document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
-      })()
+        var dark =
+          mode === "dark" ||
+          (mode === "system" &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.style.colorScheme = dark ? "dark" : "light";
+      })();
+    </script>
+    <script
+      async
+      src="https://www.googletagmanager.com/gtag/js?id=G-L04H04RSS7"
+    ></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag() {
+        dataLayer.push(arguments);
+      }
+      (gtag("js", new Date()),
+        gtag("config", "G-L04H04RSS7", {
+          content_group: "Can-i-do-it",
+        }));
     </script>
   </head>
   <body>
